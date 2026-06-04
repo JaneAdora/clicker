@@ -34,7 +34,14 @@ const REMOTE_PORT: u16 = 6466;
 /// this and the server's advertised features, so we never claim a feature the TV
 /// does not support (don't echo the server's bits, and don't echo our own blindly).
 /// Typed `i32` to match the generated `RemoteConfigure.code1` / `RemoteSetActive.active`.
-const CLIENT_FEATURES: i32 = -1; // all bits set (0xFFFF_FFFF as i32)
+///
+/// This is an EXPLICIT mask of only the features clicker actually implements —
+/// NOT `-1` (which would over-advertise IME/voice/etc. we don't handle). The bit
+/// values come from the tronikos `androidtvremote2` reference `RemoteFeature`
+/// constants (the proto here carries no `RemoteFeature` enum to derive them from):
+///   PING = 1, KEY = 2, POWER = 32, VOLUME = 64, APP_LINK = 512.
+/// PING | KEY | POWER | VOLUME | APP_LINK = 1 | 2 | 32 | 64 | 512 = 611.
+const CLIENT_FEATURES: i32 = 0b1001100011; // = 611
 
 /// Pure: decode-side mapping of an inbound RemoteMessage to an optional UI event.
 /// Unit-tested below; keeps the select loop free of branching logic.
@@ -95,17 +102,24 @@ pub async fn run_connection(
     // --- pairing phase (§4.2) if not yet paired ---
     let mut cfg = cfg;
     if !cfg.paired {
-        match pair_flow(&host, &id, &mut cmd_rx, &ev_tx).await {
-            Ok(()) => {
-                cfg.paired = true;
-                if let Err(e) = config::save(&cfg) {
-                    let _ = ev_tx.send(TvEvent::Error(format!("save config: {e}"))).await;
+        // Open the PIN modal once; a wrong PIN keeps it open and re-runs `begin()`
+        // (the TV shows a fresh code) instead of stranding the UI in a dead modal.
+        let _ = ev_tx.send(TvEvent::PairingRequired).await;
+        loop {
+            match pair_attempt(&host, &id, &mut cmd_rx).await {
+                PairStep::Paired => {
+                    cfg.paired = true;
+                    if let Err(e) = config::save(&cfg) {
+                        let _ = ev_tx.send(TvEvent::Error(format!("save config: {e}"))).await;
+                    }
+                    let _ = ev_tx.send(TvEvent::PairingOk).await;
+                    break;
                 }
-                let _ = ev_tx.send(TvEvent::PairingOk).await;
-            }
-            Err(e) => {
-                let _ = ev_tx.send(TvEvent::PairingFailed(e.to_string())).await;
-                return;
+                PairStep::Retry(msg) => {
+                    let _ = ev_tx.send(TvEvent::PairingFailed(msg)).await;
+                    // loop: re-begin → the TV displays a new PIN → await a new SubmitPin
+                }
+                PairStep::Aborted => return, // UI dropped the channel (quit) during pairing
             }
         }
     }
@@ -128,29 +142,80 @@ pub async fn run_connection(
     }
 }
 
-/// Run pairing: emit PairingRequired, await SubmitPin, finish (§4.2).
-async fn pair_flow(
-    host: &str,
-    id: &ClientIdentity,
-    cmd_rx: &mut Receiver<TvCmd>,
-    ev_tx: &Sender<TvEvent>,
-) -> anyhow::Result<()> {
-    let pairing = crate::pairing::begin(host, id).await?;
-    ev_tx.send(TvEvent::PairingRequired).await.ok();
+/// Outcome of one pairing attempt: paired, a retryable failure (wrong PIN / connect
+/// error — the caller re-begins so the TV shows a fresh code), or aborted (the UI
+/// dropped the command channel, e.g. the user quit).
+enum PairStep {
+    Paired,
+    Retry(String),
+    Aborted,
+}
+
+/// One pairing attempt: open a fresh pairing session to :6467 (the TV displays a
+/// PIN), await the typed PIN from the UI, and submit it (§4.2). PairingRequired is
+/// emitted once by the caller, not here, so retries don't reset the open modal.
+async fn pair_attempt(host: &str, id: &ClientIdentity, cmd_rx: &mut Receiver<TvCmd>) -> PairStep {
+    let pairing = match crate::pairing::begin(host, id).await {
+        Ok(p) => p,
+        Err(e) => return PairStep::Retry(format!("pairing connect failed: {e}")),
+    };
 
     // Wait for the UI to deliver the typed PIN.
     let pin = loop {
         match cmd_rx.recv().await {
             Some(TvCmd::SubmitPin(p)) => break p,
             Some(_) => continue, // ignore keys while modal is up
-            None => anyhow::bail!("cmd channel closed during pairing"),
+            None => return PairStep::Aborted,
         }
     };
 
-    pairing.finish(&pin).await
+    match pairing.finish(&pin).await {
+        Ok(()) => PairStep::Paired,
+        Err(e) => PairStep::Retry(e.to_string()),
+    }
 }
 
-/// One full remote session: connect 6466, handshake, then select loop.
+/// Inbound queue depth: how many decoded RemoteMessages the dedicated read task
+/// may buffer ahead of the main loop. The TV's traffic is bursty-but-tiny
+/// (pings, volume) so a small bound is plenty and bounds memory if the main loop
+/// ever stalls on a `wr` write.
+const INBOUND_CHANNEL: usize = 64;
+
+/// Dedicated READ TASK: owns the read half `rd` exclusively, loops
+/// `framing::read_msg`, decodes each frame to a `RemoteMessage`, and forwards it
+/// over `inbound_tx`. This is the fix for the TLS-stream-corruption bug: the raw
+/// framing read future now lives in a task that ALWAYS runs to completion on each
+/// frame, so a partially-consumed varint/frame can never be lost to a cancelled
+/// `select!` branch. On read error / EOF the loop ends; dropping `inbound_tx`
+/// closes the channel, which the main loop observes as `recv() -> None` and
+/// treats as disconnect.
+///
+/// LIVE: requires a real TV; not unit-tested.
+async fn read_task(
+    mut rd: ReadHalf<TlsStream<TcpStream>>,
+    inbound_tx: Sender<rm::RemoteMessage>,
+) {
+    loop {
+        let bytes = match read_msg(&mut rd).await {
+            Ok(b) => b,
+            Err(_) => return, // socket error / EOF -> end task, close channel
+        };
+        let msg = match rm::RemoteMessage::decode(&bytes[..]) {
+            Ok(m) => m,
+            Err(_) => return, // malformed frame: stream desync -> bail, reconnect
+        };
+        if inbound_tx.send(msg).await.is_err() {
+            return; // main loop gone -> nothing to do
+        }
+    }
+}
+
+/// One full remote session: connect 6466, spawn the read task, handshake (waiting
+/// for `remote_start`), then run the steady-state single-writer select loop.
+///
+/// SINGLE WRITER: this function is the only owner of the write half `wr`. The read
+/// task owns `rd`. No half is shared, so there is no read/write contention and no
+/// way for a cancelled read to strand bytes.
 async fn serve_once(
     host: &str,
     cfg: &Config,
@@ -159,11 +224,60 @@ async fn serve_once(
     ev_tx: &Sender<TvEvent>,
 ) -> anyhow::Result<()> {
     let (stream, _server_cert) = crate::tls::connect(host, REMOTE_PORT, id).await?;
-    let (mut rd, mut wr): (ReadHalf<TlsStream<TcpStream>>, WriteHalf<TlsStream<TcpStream>>) =
+    let (rd, mut wr): (ReadHalf<TlsStream<TcpStream>>, WriteHalf<TlsStream<TcpStream>>) =
         tokio::io::split(stream);
 
-    // §4.3.2 handshake: <- RemoteConfigure -> echo device_info + feature bits
-    handshake(&mut rd, &mut wr).await?;
+    // Spawn the dedicated read task; from here on all inbound messages arrive on
+    // `inbound_rx`, never by reading `rd` directly.
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<rm::RemoteMessage>(INBOUND_CHANNEL);
+    let reader = tokio::spawn(read_task(rd, inbound_tx));
+
+    // Run the handshake + wait-for-remote_start phase. Anything that goes wrong
+    // (channel closed early = read task died, protocol violation) is a session
+    // error: abort the reader and propagate so the outer loop reconnects.
+    let result = serve_handshake_and_loop(cfg, cmd_rx, ev_tx, &mut wr, &mut inbound_rx).await;
+    reader.abort();
+    result
+}
+
+/// Handshake (§4.3.2) → wait for `remote_start` (§4.3.x) → steady-state loop.
+/// Split out so `serve_once` can always abort the read task afterwards.
+async fn serve_handshake_and_loop(
+    cfg: &Config,
+    cmd_rx: &mut Receiver<TvCmd>,
+    ev_tx: &Sender<TvEvent>,
+    wr: &mut WriteHalf<TlsStream<TcpStream>>,
+    inbound_rx: &mut Receiver<rm::RemoteMessage>,
+) -> anyhow::Result<()> {
+    // --- §4.3.2 handshake: <- RemoteConfigure -> echo device_info + feature bits,
+    //     <- RemoteSetActive -> echo masked active mask. ---
+    handshake(wr, inbound_rx).await?;
+
+    // --- Wait for the TV's `remote_start` before declaring Connected. The
+    //     reference does not treat the remote as ready until `remote_start`
+    //     arrives. While waiting we still answer pings so the link stays alive. ---
+    loop {
+        let msg = inbound_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("read task ended before remote_start"))?;
+        if let Some(ping) = &msg.remote_ping_request {
+            answer_ping(wr, ping.val1).await?;
+            continue;
+        }
+        if let Some(start) = &msg.remote_start {
+            // `started` is informational; arrival of remote_start is the gate.
+            let _ = start.started;
+            break;
+        }
+        // Any other message before remote_start (e.g. an early volume update) is
+        // surfaced but does not flip us to Connected yet.
+        if let Some(ev) = message_to_event(&msg) {
+            ev_tx.send(ev).await.ok();
+        }
+    }
+
+    // remote_start seen → NOW we're ready to accept commands.
     ev_tx
         .send(TvEvent::Connected {
             name: cfg.name.clone().unwrap_or_else(|| "Android TV".into()),
@@ -171,19 +285,20 @@ async fn serve_once(
         .await
         .ok();
 
-    // §4.3.3-5 serve loop
+    // --- §4.3.3-5 steady-state serve loop. Single writer (`wr`); inbound arrives
+    //     only via `inbound_rx`. No raw framing read future in this select. ---
     loop {
         tokio::select! {
-            // inbound from the TV
-            framed = read_msg(&mut rd) => {
-                let bytes = framed?; // socket error -> reconnect
-                let msg = rm::RemoteMessage::decode(&bytes[..])?;
+            // inbound, already framed + decoded by the read task
+            inbound = inbound_rx.recv() => {
+                let Some(msg) = inbound else {
+                    // read task ended (socket error / EOF) -> disconnect, reconnect
+                    return Ok(());
+                };
 
                 // keepalive: answer ping immediately (§4.3.3)
                 if let Some(ping) = &msg.remote_ping_request {
-                    let mut pong = rm::RemoteMessage::default();
-                    pong.remote_ping_response = Some(rm::RemotePingResponse { val1: ping.val1 });
-                    write_msg(&mut wr, &encode(pong)).await?;
+                    answer_ping(wr, ping.val1).await?;
                     continue;
                 }
                 // state updates -> UI events (volume, …)
@@ -194,9 +309,9 @@ async fn serve_once(
             // outbound from the UI
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(TvCmd::Key(k)) => write_msg(&mut wr, &encode(key_message(k))).await?,
+                    Some(TvCmd::Key(k)) => write_msg(wr, &encode(key_message(k))).await?,
                     Some(TvCmd::LaunchApp(url)) => {
-                        write_msg(&mut wr, &encode(applink_message(url))).await?
+                        write_msg(wr, &encode(applink_message(url))).await?
                     }
                     // a stray PIN after pairing: ignore
                     Some(TvCmd::SubmitPin(_)) => {}
@@ -207,14 +322,27 @@ async fn serve_once(
     }
 }
 
+/// -> RemotePingResponse echoing the request's `val1` (§4.3.3). Single-writer.
+async fn answer_ping(wr: &mut WriteHalf<TlsStream<TcpStream>>, val1: i32) -> anyhow::Result<()> {
+    let mut pong = rm::RemoteMessage::default();
+    pong.remote_ping_response = Some(rm::RemotePingResponse { val1 });
+    write_msg(wr, &encode(pong)).await?;
+    Ok(())
+}
+
 /// §4.3.2: respond to RemoteConfigure with the MASKED feature set, then
-/// RemoteSetActive (with the active feature BITMASK, not a boolean).
+/// RemoteSetActive (with the active feature BITMASK, not a boolean). Inbound
+/// messages are taken from `inbound_rx` (fed by the dedicated read task); the
+/// write half `wr` is used exclusively here.
 async fn handshake(
-    rd: &mut ReadHalf<TlsStream<TcpStream>>,
     wr: &mut WriteHalf<TlsStream<TcpStream>>,
+    inbound_rx: &mut Receiver<rm::RemoteMessage>,
 ) -> anyhow::Result<()> {
     // <- RemoteConfigure
-    let first = rm::RemoteMessage::decode(&read_msg(rd).await?[..])?;
+    let first = inbound_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("read task ended before RemoteConfigure"))?;
     let server_cfg = first
         .remote_configure
         .ok_or_else(|| anyhow::anyhow!("expected RemoteConfigure first"))?;
@@ -239,7 +367,10 @@ async fn handshake(
     write_msg(wr, &encode(reply)).await?;
 
     // <- RemoteSetActive
-    let active_msg = rm::RemoteMessage::decode(&read_msg(rd).await?[..])?;
+    let active_msg = inbound_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("read task ended before RemoteSetActive"))?;
     let _active = active_msg
         .remote_set_active
         .ok_or_else(|| anyhow::anyhow!("expected RemoteSetActive"))?;

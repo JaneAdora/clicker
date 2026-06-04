@@ -122,6 +122,13 @@ const EVENT_CHANNEL: usize = 64;
 const TICK: Duration = Duration::from_millis(250);
 
 /// The async event loop. tokio lives entirely in here; `main()` stays sync.
+/// Persist config; surface a failure via a toast instead of silently dropping it.
+fn save_or_toast(app: &mut App) {
+    if let Err(e) = config::save(&app.config) {
+        app.toast(format!("config save failed: {e}"));
+    }
+}
+
 pub async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     cfg: Config,
@@ -176,7 +183,7 @@ pub async fn run<B: Backend>(
                             KeyOutcome::HostEntered(host) => {
                                 // Persist and spawn the connection task (first run only).
                                 app.config.host = Some(host);
-                                let _ = config::save(&app.config);
+                                save_or_toast(&mut app);
                                 if let Some(rx) = cmd_rx.take() {
                                     conn = Some(tokio::spawn(remote::run_connection(
                                         app.config.clone(),
@@ -201,16 +208,25 @@ pub async fn run<B: Backend>(
                 // `last_volume` are otherwise never written, so the config would
                 // never self-heal. A simple save per change is fine at this volume.
                 match &ev {
+                    // Persist pairing success FIRST and onto the UI's own config, so
+                    // the later name/volume saves carry paired=true and never clobber
+                    // it back to false (the bug Codex flagged).
+                    TvEvent::PairingOk => {
+                        if !app.config.paired {
+                            app.config.paired = true;
+                            save_or_toast(&mut app);
+                        }
+                    }
                     TvEvent::Connected { name } => {
                         if app.config.name.as_deref() != Some(name.as_str()) {
                             app.config.name = Some(name.clone());
-                            let _ = config::save(&app.config);
+                            save_or_toast(&mut app);
                         }
                     }
                     TvEvent::VolumeChanged { level, .. } => {
                         if app.config.last_volume != Some(*level) {
                             app.config.last_volume = Some(*level);
-                            let _ = config::save(&app.config);
+                            save_or_toast(&mut app);
                         }
                     }
                     _ => {}

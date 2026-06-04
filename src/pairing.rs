@@ -141,7 +141,9 @@ pub async fn begin(host: &str, id: &ClientIdentity) -> anyhow::Result<Pairing> {
     // §4.2.2 -> PairingRequest
     let req = polo::OuterMessage {
         pairing_request: Some(polo::PairingRequest {
-            service_name: "clicker".into(),
+            // Match the reference protocol identifier (tronikos uses "atvremote");
+            // the human-facing label is carried by client_name.
+            service_name: "atvremote".into(),
             client_name: Some("clicker".into()),
         }),
         ..outer_skeleton()
