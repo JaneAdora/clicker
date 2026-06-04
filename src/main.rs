@@ -10,6 +10,7 @@ mod remote;
 mod theme;
 mod keymap;
 mod ui;
+mod app;
 
 fn main() -> anyhow::Result<()> {
     // Stub entry point. Real lifecycle (panic hook, raw mode, alt screen,
