@@ -1,5 +1,6 @@
 // /home/jane/projects/clicker/src/main.rs
 mod proto;
+mod types;
 
 fn main() -> anyhow::Result<()> {
     // Stub entry point. Real lifecycle (panic hook, raw mode, alt screen,
