@@ -66,6 +66,173 @@ pub fn compute_secret(
     Ok(digest.to_vec())
 }
 
+// ============================================================================
+// §4.2 pairing handshake over framed protobuf to :6467.
+//
+// LIVE/INTEGRATION code: the walk below needs a real TV and is exercised in the
+// integration milestone, not in unit tests. It is written to COMPILE against the
+// real prost-generated `crate::proto::polo` types. Notable prost facts (proto2):
+//   * `OuterMessage.protocol_version` is `u32` (required), `status` is `i32`
+//     (required, enum-backed) — NOT `Option<_>`.
+//   * Payload fields are `options` / `configuration` / `configuration_ack` /
+//     `secret` / `secret_ack` (plus `pairing_request[_ack]`), each `Option<T>`.
+//   * `PairingRequest.service_name` is `String` (required); `client_name` is
+//     `Option<String>`.
+//   * `Options::Encoding.r#type` is `i32`, `symbol_length` is `u32` (both required).
+//   * `Configuration.encoding` is `options::Encoding` (required, NOT Option),
+//     `client_role` is `i32` (required).
+//   * `Secret.secret` is `Vec<u8>` (required, NOT Option).
+//   * Status enum variant is `outer_message::Status::Ok` (= 200).
+// ============================================================================
+
+use prost::Message;
+use tokio::net::TcpStream;
+use tokio_rustls::client::TlsStream;
+
+use crate::cert::ClientIdentity;
+use crate::framing::{read_msg, write_msg};
+use crate::proto::polo;
+
+const PAIRING_PORT: u16 = 6467;
+
+/// Owns the TLS stream to the pairing port plus everything needed to finish.
+pub struct Pairing {
+    stream: TlsStream<TcpStream>,
+    client_n: Vec<u8>,
+    client_e: Vec<u8>,
+    server_n: Vec<u8>,
+    server_e: Vec<u8>,
+}
+
+/// Build an OK `OuterMessage` skeleton (proto2 required `protocol_version` +
+/// `status` set; every `Option` payload field defaults to `None`). Callers fill
+/// in the one relevant payload field.
+fn outer_skeleton() -> polo::OuterMessage {
+    polo::OuterMessage {
+        protocol_version: 2,
+        status: polo::outer_message::Status::Ok as i32,
+        ..Default::default()
+    }
+}
+
+fn encode_outer(msg: &polo::OuterMessage) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf).expect("encode OuterMessage");
+    buf
+}
+
+fn parse_outer(bytes: &[u8]) -> anyhow::Result<polo::OuterMessage> {
+    let m = polo::OuterMessage::decode(bytes).context("decode OuterMessage")?;
+    if m.status != polo::outer_message::Status::Ok as i32 {
+        bail!("pairing peer returned status {}", m.status);
+    }
+    Ok(m)
+}
+
+/// Connect to the TV pairing port and walk PairingRequest -> ConfigurationAck.
+/// Returns once the TV is displaying its 6-hex PIN (§4.2 steps 1-7).
+///
+/// LIVE: requires a real TV; not unit-tested.
+pub async fn begin(host: &str, id: &ClientIdentity) -> anyhow::Result<Pairing> {
+    // §4.2.1 TLS connect; capture server cert DER.
+    let (mut stream, server_cert) = crate::tls::connect(host, PAIRING_PORT, id).await?;
+    let (server_n, server_e) = rsa_params_from_cert_der(&server_cert)?;
+
+    // §4.2.2 -> PairingRequest
+    let req = polo::OuterMessage {
+        pairing_request: Some(polo::PairingRequest {
+            service_name: "clicker".into(),
+            client_name: Some("clicker".into()),
+        }),
+        ..outer_skeleton()
+    };
+    write_msg(&mut stream, &encode_outer(&req)).await?;
+
+    // §4.2.3 <- PairingRequestAck
+    let ack = parse_outer(&read_msg(&mut stream).await?)?;
+    if ack.pairing_request_ack.is_none() {
+        bail!("expected PairingRequestAck, got {ack:?}");
+    }
+
+    // §4.2.4 -> Options { HEXADECIMAL, symbol_length 6, role INPUT }
+    let encoding = polo::options::Encoding {
+        r#type: polo::options::encoding::EncodingType::Hexadecimal as i32,
+        symbol_length: 6,
+    };
+    let mut opt = polo::Options::default();
+    opt.input_encodings.push(encoding);
+    opt.preferred_role = Some(polo::options::RoleType::Input as i32);
+    let opt_msg = polo::OuterMessage {
+        options: Some(opt),
+        ..outer_skeleton()
+    };
+    write_msg(&mut stream, &encode_outer(&opt_msg)).await?;
+
+    // §4.2.5 <- server Options (NOT an ack message)
+    let server_opts = parse_outer(&read_msg(&mut stream).await?)?;
+    if server_opts.options.is_none() {
+        bail!("expected server Options, got {server_opts:?}");
+    }
+
+    // §4.2.6 -> Configuration { encoding, client_role }
+    let cfg_msg = polo::OuterMessage {
+        configuration: Some(polo::Configuration {
+            encoding: polo::options::Encoding {
+                r#type: polo::options::encoding::EncodingType::Hexadecimal as i32,
+                symbol_length: 6,
+            },
+            client_role: polo::options::RoleType::Input as i32,
+        }),
+        ..outer_skeleton()
+    };
+    write_msg(&mut stream, &encode_outer(&cfg_msg)).await?;
+
+    // §4.2.7 <- ConfigurationAck  (TV now shows the PIN)
+    let cfg_ack = parse_outer(&read_msg(&mut stream).await?)?;
+    if cfg_ack.configuration_ack.is_none() {
+        bail!("expected ConfigurationAck, got {cfg_ack:?}");
+    }
+
+    let (client_n, client_e) = (id.modulus.clone(), id.exponent.clone());
+    Ok(Pairing {
+        stream,
+        client_n,
+        client_e,
+        server_n,
+        server_e,
+    })
+}
+
+impl Pairing {
+    /// Finish pairing: compute secret from the PIN, send Secret,
+    /// await SecretAck (§4.2 steps 8-11).
+    ///
+    /// LIVE: requires a real TV; not unit-tested.
+    pub async fn finish(mut self, pin: &str) -> anyhow::Result<()> {
+        let secret = compute_secret(
+            &self.client_n,
+            &self.client_e,
+            &self.server_n,
+            &self.server_e,
+            pin,
+        )?;
+
+        // §4.2.10 -> Secret
+        let secret_msg = polo::OuterMessage {
+            secret: Some(polo::Secret { secret }),
+            ..outer_skeleton()
+        };
+        write_msg(&mut self.stream, &encode_outer(&secret_msg)).await?;
+
+        // §4.2.11 <- SecretAck
+        let ack = parse_outer(&read_msg(&mut self.stream).await?)?;
+        if ack.secret_ack.is_none() {
+            bail!("expected SecretAck, got {ack:?}");
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
