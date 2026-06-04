@@ -7,8 +7,10 @@ description = "A terminal Android TV remote, native to the Rust TUI suite."
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
-tokio-rustls = "0.26"
-rustls = "0.23"
+# Use the `ring` crypto provider (not the default aws-lc-rs) so the build needs only
+# a C toolchain — no cmake. rcgen already uses ring, so this drops aws-lc-sys entirely.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pemfile = "2"
 rcgen = { version = "0.14", features = ["pem"] }
 rsa = "0.9"

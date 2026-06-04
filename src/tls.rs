@@ -76,7 +76,7 @@ pub async fn connect(
     id: &ClientIdentity,
 ) -> anyhow::Result<(TlsStream<TcpStream>, Vec<u8>)> {
     // Ensure a default crypto provider exists (idempotent; ignore "already set").
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let verifier = Arc::new(CapturingVerifier::new(captured.clone()));
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn verifier_captures_end_entity_der() {
         // Install a provider so signature_verification_algorithms resolves.
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls::crypto::ring::default_provider().install_default();
 
         let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
         let verifier = CapturingVerifier::new(captured.clone());
