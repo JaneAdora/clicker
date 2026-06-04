@@ -31,6 +31,9 @@ hex = "0.4"
 prost-build = "0.13"
 protox = "0.7"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -2,6 +2,7 @@
 mod proto;
 mod types;
 mod framing;
+mod cert;
 
 fn main() -> anyhow::Result<()> {
     // Stub entry point. Real lifecycle (panic hook, raw mode, alt screen,

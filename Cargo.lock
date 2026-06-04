@@ -221,6 +221,7 @@ dependencies = [
  "serde",
  "sha2",
  "suite-term",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "toml",
