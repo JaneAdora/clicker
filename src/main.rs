@@ -6,6 +6,7 @@ mod cert;
 mod tls;
 mod pairing;
 mod config;
+mod remote;
 
 fn main() -> anyhow::Result<()> {
     // Stub entry point. Real lifecycle (panic hook, raw mode, alt screen,
