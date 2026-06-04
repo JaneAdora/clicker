@@ -98,6 +98,277 @@ impl App {
     }
 }
 
+// ===========================================================================
+// I3: async event loop (`run`) + synchronous key dispatch (`handle_key`,
+// `handle_pin_key`). tokio lives entirely inside `run`; `main()` stays sync.
+// ===========================================================================
+
+use crate::cert::ClientIdentity;
+use crate::config;
+use crate::keymap::{self, Action};
+use crate::remote;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use futures::StreamExt;
+use ratatui::backend::Backend;
+use ratatui::Terminal;
+use tokio::sync::mpsc;
+
+/// Bounded so a wedged connection task can never make the draw path block;
+/// key handlers `try_send` and drop (with a toast) if the channel is full.
+const CMD_CHANNEL: usize = 64;
+const EVENT_CHANNEL: usize = 64;
+/// Render + keepalive tick. Not an animation clock — just toast expiry and a
+/// pulse so the connection task's keepalive has a UI heartbeat.
+const TICK: Duration = Duration::from_millis(250);
+
+/// The async event loop. tokio lives entirely in here; `main()` stays sync.
+pub async fn run<B: Backend>(
+    terminal: &mut Terminal<B>,
+    cfg: Config,
+    id: ClientIdentity,
+) -> anyhow::Result<()> {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<TvCmd>(CMD_CHANNEL);
+    let (ev_tx, mut ev_rx) = mpsc::channel(EVENT_CHANNEL);
+
+    let mut app = App::new(cfg, cmd_tx.clone());
+
+    // The connection task consumes `cmd_rx` exactly once — either now (host known)
+    // or after the first-run host prompt resolves. Hold it in an Option and
+    // `.take()` it at the single spawn site so the borrow checker is satisfied and
+    // we can never accidentally reuse a moved receiver. The owned identity stays
+    // borrowed via `id_clone(&id)` at each spawn site, so it is never moved out.
+    let mut cmd_rx = Some(cmd_rx);
+
+    // First-run host prompt: no host yet → capture the TV IP in a DISTINCT
+    // HostEntry modal (not the PIN modal) before connecting.
+    if app.config.host.is_none() {
+        app.mode = InputMode::HostEntry {
+            entered: String::new(),
+        };
+        app.toast("Enter the TV's IP address");
+    }
+
+    // Spawn the connection task only once we have a host. If we still need the
+    // host, the spawn is deferred until the prompt is answered (below).
+    let mut conn: Option<tokio::task::JoinHandle<()>> = None;
+    if app.config.host.is_some() {
+        conn = Some(tokio::spawn(remote::run_connection(
+            app.config.clone(),
+            id_clone(&id)?,
+            cmd_rx.take().unwrap(),
+            ev_tx.clone(),
+        )));
+    }
+
+    let mut events = crossterm::event::EventStream::new();
+    let mut ticker = tokio::time::interval(TICK);
+
+    terminal.draw(|f| crate::ui::render(f, &app))?;
+
+    loop {
+        let mut dirty = false;
+        tokio::select! {
+            maybe = events.next() => {
+                match maybe {
+                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                        match handle_key(&mut app, key) {
+                            KeyOutcome::Quit => break,
+                            KeyOutcome::HostEntered(host) => {
+                                // Persist and spawn the connection task (first run only).
+                                app.config.host = Some(host);
+                                let _ = config::save(&app.config);
+                                if let Some(rx) = cmd_rx.take() {
+                                    conn = Some(tokio::spawn(remote::run_connection(
+                                        app.config.clone(),
+                                        id_clone(&id)?,
+                                        rx,
+                                        ev_tx.clone(),
+                                    )));
+                                }
+                                dirty = true;
+                            }
+                            KeyOutcome::Redraw => dirty = true,
+                            KeyOutcome::Ignored => {}
+                        }
+                    }
+                    Some(Ok(Event::Resize(_, _))) => dirty = true,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => break, // stdin closed → exit cleanly
+                }
+            }
+            Some(ev) = ev_rx.recv() => {
+                // Persist the fields the config claims to remember. `name` and
+                // `last_volume` are otherwise never written, so the config would
+                // never self-heal. A simple save per change is fine at this volume.
+                match &ev {
+                    TvEvent::Connected { name } => {
+                        if app.config.name.as_deref() != Some(name.as_str()) {
+                            app.config.name = Some(name.clone());
+                            let _ = config::save(&app.config);
+                        }
+                    }
+                    TvEvent::VolumeChanged { level, .. } => {
+                        if app.config.last_volume != Some(*level) {
+                            app.config.last_volume = Some(*level);
+                            let _ = config::save(&app.config);
+                        }
+                    }
+                    _ => {}
+                }
+                app.apply_tv_event(ev);
+                dirty = true;
+            }
+            _ = ticker.tick() => {
+                app.tick(); // expire 3s toast
+                dirty = true;
+            }
+        }
+        if dirty {
+            terminal.draw(|f| crate::ui::render(f, &app))?;
+        }
+    }
+
+    if let Some(h) = conn {
+        h.abort();
+    }
+    Ok(())
+}
+
+/// `load_or_generate` already produced one identity; the connection task needs
+/// an owned copy. Re-load from disk (cheap, one-time) rather than deriving Clone
+/// on the DER types. Always succeeds here because cert/key were just written.
+fn id_clone(_id: &ClientIdentity) -> anyhow::Result<ClientIdentity> {
+    crate::cert::load_or_generate(&config::dir())
+}
+
+enum KeyOutcome {
+    Quit,
+    Redraw,
+    Ignored,
+    HostEntered(String),
+}
+
+/// Dispatch a keypress by the current `InputMode`. Synchronous: only `try_send`
+/// onto the cmd channel, never `.await` — the draw path must never block.
+fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    // GLOBAL quit, available in EVERY mode (Normal, Help, HostEntry, PinEntry).
+    // Without this, Esc in PinEntry would drop to Normal while the connection task
+    // blocks forever waiting for a SubmitPin that can no longer arrive — the only
+    // escape from a stuck pairing modal is to quit, so quit must always work.
+    // `q` quits in text-entry modes too (an IP/PIN never contains a bare 'q'); use
+    // Ctrl-C as the universal belt-and-suspenders quit.
+    if matches!(key.code, KeyCode::Char('q'))
+        || (matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL))
+    {
+        return KeyOutcome::Quit;
+    }
+
+    match &app.mode {
+        // First-run host capture and PIN capture share the same keystroke handling.
+        InputMode::HostEntry { .. } | InputMode::PinEntry { .. } => handle_pin_key(app, key),
+        InputMode::Help => {
+            // Any key closes the help overlay (roam modal convention).
+            app.mode = InputMode::Normal;
+            KeyOutcome::Redraw
+        }
+        InputMode::Normal => match keymap::map_normal(key) {
+            Some(Action::Quit) => KeyOutcome::Quit,
+            Some(Action::ShowHelp) => {
+                app.mode = InputMode::Help;
+                KeyOutcome::Redraw
+            }
+            Some(Action::CloseModal) => KeyOutcome::Ignored, // nothing open in Normal
+            Some(Action::EnterTextMode) => KeyOutcome::Ignored, // v1.1 IME; no-op in v1
+            Some(Action::Cmd(cmd)) => {
+                if app.cmd_tx.try_send(cmd).is_err() {
+                    app.toast("link busy — key dropped");
+                }
+                KeyOutcome::Redraw
+            }
+            None => KeyOutcome::Ignored,
+        },
+    }
+}
+
+/// Text-capture keystroke handling shared by the first-run host prompt
+/// (`InputMode::HostEntry`) and the pairing PIN modal (`InputMode::PinEntry`).
+/// Backspace deletes, printable chars append, Enter submits. Esc is a deliberate
+/// no-op here (see below). The two modes are distinguished by the variant itself,
+/// not by inspecting `config.host`.
+fn handle_pin_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    // Which text-capture modal are we in, and what is its current buffer?
+    let (is_host, mut buf) = match &app.mode {
+        InputMode::HostEntry { entered } => (true, entered.clone()),
+        InputMode::PinEntry { entered, .. } => (false, entered.clone()),
+        _ => return KeyOutcome::Ignored,
+    };
+
+    // Helper: rebuild the correct variant for the mode we're in.
+    let rebuild = |entered: String, error: Option<String>| {
+        if is_host {
+            InputMode::HostEntry { entered }
+        } else {
+            InputMode::PinEntry { entered, error }
+        }
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            // DELIBERATE no-op. Dropping to Normal here would strand the connection
+            // task: in PinEntry it waits forever for a SubmitPin, and in HostEntry
+            // there is no host to connect to. The modal stays open; quit with `q`
+            // or Ctrl-C (handled globally in `handle_key`) to leave.
+            KeyOutcome::Ignored
+        }
+        KeyCode::Backspace => {
+            buf.pop();
+            app.mode = rebuild(buf, None);
+            KeyOutcome::Redraw
+        }
+        KeyCode::Enter => {
+            if buf.is_empty() {
+                // Empty host: keep waiting silently. Empty PIN: show an error line.
+                app.mode = rebuild(buf, Some("empty".into()));
+                return KeyOutcome::Redraw;
+            }
+            if is_host {
+                // First-run host prompt: hand the IP back to run() to save + spawn
+                // the connection task, then drop the modal (run() picks the next
+                // mode — pairing will reopen a PinEntry modal via PairingRequired).
+                app.mode = InputMode::Normal;
+                KeyOutcome::HostEntered(buf)
+            } else {
+                // Pairing PIN path: ship the PIN to the connection task.
+                if app.cmd_tx.try_send(TvCmd::SubmitPin(buf.clone())).is_err() {
+                    app.mode = InputMode::PinEntry {
+                        entered: buf,
+                        error: Some("link busy — retry".into()),
+                    };
+                    return KeyOutcome::Redraw;
+                }
+                // Keep the modal up; the task replies PairingOk/PairingFailed,
+                // and apply_tv_event closes it or sets the error line.
+                app.mode = InputMode::PinEntry {
+                    entered: String::new(),
+                    error: None,
+                };
+                KeyOutcome::Redraw
+            }
+        }
+        KeyCode::Char(c) => {
+            // Host prompt accepts IP/hostname chars; PIN accepts hex digits.
+            // Accept any printable, non-control char; validation happens on submit
+            // (and, for the PIN, via the TV's PairingFailed response).
+            if !c.is_control() {
+                buf.push(c);
+            }
+            app.mode = rebuild(buf, None);
+            KeyOutcome::Redraw
+        }
+        _ => KeyOutcome::Ignored,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
