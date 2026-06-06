@@ -57,6 +57,52 @@ pub fn render_pin(f: &mut Frame, area: Rect, entered: &str, error: Option<&str>)
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Keycode probe (debug): type any Android keycode, Enter fires it. Includes a
+/// cheat-sheet of codes worth trying for TV-dependent buttons like input/source —
+/// the direct-HDMI codes (243-246) often work where the generic input (178) doesn't.
+pub fn render_probe(f: &mut Frame, area: Rect, entered: &str, last: Option<&str>) {
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " keycode probe ",
+            theme::pane_header_focused(),
+        )))
+        .borders(Borders::ALL)
+        .border_style(theme::pane_header());
+    f.render_widget(Clear, area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled("keycode + Enter:", theme::dim())),
+        Line::from(Span::styled(
+            format!(" > {entered}\u{2588}"),
+            theme::pane_header(),
+        )),
+    ];
+    if let Some(l) = last {
+        lines.push(Line::from(Span::styled(l.to_string(), theme::status())));
+    }
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::styled("try for input/source:", theme::dim())));
+    for (code, name) in [
+        ("178", "TV_INPUT (generic)"),
+        ("243", "HDMI 1"),
+        ("244", "HDMI 2"),
+        ("245", "HDMI 3"),
+        ("170", "TV"),
+        ("176", "Settings"),
+        ("172", "Guide"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {code:<5}"), theme::pane_header_focused()),
+            Span::styled(name.to_string(), theme::dim()),
+        ]));
+    }
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::styled("esc to close", theme::dim())));
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 /// First-run host (TV IP) entry. NOT masked — an IP address is not a secret.
 /// Distinct title/prompt from the PIN modal so the two are never confused.
 pub fn render_host(f: &mut Frame, area: Rect, entered: &str) {

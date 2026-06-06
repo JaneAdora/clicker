@@ -234,4 +234,19 @@ mod tests {
         terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
         println!("\n{}", terminal.backend());
     }
+
+    #[test]
+    fn snapshot_keycode_probe() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let mut app = App::new(Config::default(), tx);
+        app.tv_name = "Living Room".into();
+        app.link = crate::types::LinkState::Connected;
+        app.mode = crate::types::InputMode::KeyProbe {
+            entered: "243".into(),
+            last: Some("sent keycode 178".into()),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(44, 44)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
+        println!("\n{}", terminal.backend());
+    }
 }

@@ -282,8 +282,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     match &app.mode {
         // First-run host capture and PIN capture share the same keystroke handling.
         InputMode::HostEntry { .. } | InputMode::PinEntry { .. } => handle_pin_key(app, key),
+        InputMode::KeyProbe { .. } => handle_probe_key(app, key),
         InputMode::Normal => match keymap::map_normal(key) {
             Some(Action::Quit) => KeyOutcome::Quit,
+            Some(Action::EnterProbe) => {
+                app.mode = InputMode::KeyProbe {
+                    entered: String::new(),
+                    last: None,
+                };
+                KeyOutcome::Redraw
+            }
             Some(Action::EnterTextMode) => {
                 // IME text entry lands in v1.1; say so rather than silently ignoring.
                 app.toast("text entry (k) — coming in v1.1");
@@ -373,6 +381,50 @@ fn handle_pin_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 buf.push(c);
             }
             app.mode = rebuild(buf, None);
+            KeyOutcome::Redraw
+        }
+        _ => KeyOutcome::Ignored,
+    }
+}
+
+/// Keycode-probe modal: type any Android keycode and fire it (SHORT press). A
+/// debug escape hatch for buttons whose standard keycode the TV ignores (e.g. the
+/// input/source selector on some TVs). Esc leaves; q/Ctrl-C still quit globally.
+fn handle_probe_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    let (mut entered, last) = match &app.mode {
+        InputMode::KeyProbe { entered, last } => (entered.clone(), last.clone()),
+        _ => return KeyOutcome::Ignored,
+    };
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = InputMode::Normal;
+            KeyOutcome::Redraw
+        }
+        KeyCode::Backspace => {
+            entered.pop();
+            app.mode = InputMode::KeyProbe { entered, last };
+            KeyOutcome::Redraw
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            entered.push(c);
+            app.mode = InputMode::KeyProbe { entered, last };
+            KeyOutcome::Redraw
+        }
+        KeyCode::Enter => {
+            let last = match entered.parse::<i32>() {
+                Ok(code) => {
+                    if app.cmd_tx.try_send(TvCmd::RawKey(code)).is_err() {
+                        Some("link busy — not sent".to_string())
+                    } else {
+                        Some(format!("sent keycode {code}"))
+                    }
+                }
+                Err(_) => Some("enter a number".to_string()),
+            };
+            app.mode = InputMode::KeyProbe {
+                entered: String::new(),
+                last,
+            };
             KeyOutcome::Redraw
         }
         _ => KeyOutcome::Ignored,

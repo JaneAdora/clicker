@@ -18,6 +18,7 @@ pub enum Action {
     Cmd(TvCmd),
     Quit,
     EnterTextMode, // `k` — IME text entry (lands in v1.1)
+    EnterProbe,    // `/` — raw keycode probe (debug)
 }
 
 pub fn map_normal(key: KeyEvent) -> Option<Action> {
@@ -71,6 +72,7 @@ pub fn map_normal(key: KeyEvent) -> Option<Action> {
 
         // clicker itself
         Char('q') => Some(Action::Quit),
+        Char('/') => Some(Action::EnterProbe), // debug: send a raw keycode
 
         _ => None,
     }
@@ -144,5 +146,13 @@ mod tests {
     #[test]
     fn q_quits() {
         assert!(matches!(map_normal(ev(KeyCode::Char('q'))), Some(Action::Quit)));
+    }
+
+    #[test]
+    fn slash_enters_probe() {
+        assert!(matches!(
+            map_normal(ev(KeyCode::Char('/'))),
+            Some(Action::EnterProbe)
+        ));
     }
 }

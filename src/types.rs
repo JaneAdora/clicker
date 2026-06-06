@@ -43,6 +43,7 @@ impl RemoteKey {
 #[derive(Debug)]
 pub enum TvCmd {
     Key(RemoteKey),
+    RawKey(i32), // arbitrary Android keycode (from the debug probe)
     LaunchApp(String),
     SubmitPin(String),
 }
@@ -71,6 +72,7 @@ pub enum InputMode {
     Normal,
     HostEntry { entered: String },
     PinEntry { entered: String, error: Option<String> },
+    KeyProbe { entered: String, last: Option<String> },
 }
 
 #[cfg(test)]

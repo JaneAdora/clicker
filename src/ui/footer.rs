@@ -9,7 +9,9 @@ use ratatui::Frame;
 pub fn render(f: &mut Frame, area: Rect, transient: Option<&str>) {
     let mut lines = vec![Line::from(vec![
         Span::styled("[q]", theme::pane_header_focused()),
-        Span::styled(" quit", theme::dim()),
+        Span::styled(" quit   ", theme::dim()),
+        Span::styled("[/]", theme::pane_header_focused()),
+        Span::styled(" keycode probe", theme::dim()),
     ])];
     if let Some(msg) = transient {
         lines.push(Line::from(Span::styled(msg.to_string(), theme::status())));

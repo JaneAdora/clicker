@@ -62,17 +62,20 @@ fn encode(msg: rm::RemoteMessage) -> Vec<u8> {
     buf
 }
 
-/// Build a RemoteMessage carrying a key inject (SHORT press) for `key`.
-fn key_message(key: RemoteKey) -> rm::RemoteMessage {
+/// Build a RemoteMessage carrying a key inject (SHORT press) for a raw Android
+/// keycode. RemoteDirection is a TOP-LEVEL enum in remotemessage.proto.
+fn inject(code: i32) -> rm::RemoteMessage {
     let mut m = rm::RemoteMessage::default();
     m.remote_key_inject = Some(rm::RemoteKeyInject {
-        // key_code is an i32 enum field; the RemoteKey::keycode() integers match
-        // RemoteKeyCode's tag values directly (no keymap indirection).
-        key_code: key.keycode(),
-        // RemoteDirection is a TOP-LEVEL enum in remotemessage.proto.
+        key_code: code,
         direction: rm::RemoteDirection::Short as i32,
     });
     m
+}
+
+/// Build a RemoteMessage carrying a key inject (SHORT press) for `key`.
+fn key_message(key: RemoteKey) -> rm::RemoteMessage {
+    inject(key.keycode())
 }
 
 /// Build a RemoteMessage carrying an app-link launch.
@@ -310,6 +313,7 @@ async fn serve_handshake_and_loop(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(TvCmd::Key(k)) => write_msg(wr, &encode(key_message(k))).await?,
+                    Some(TvCmd::RawKey(code)) => write_msg(wr, &encode(inject(code))).await?,
                     Some(TvCmd::LaunchApp(url)) => {
                         write_msg(wr, &encode(applink_message(url))).await?
                     }
