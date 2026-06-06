@@ -1,7 +1,7 @@
 // src/ui/header.rs
 use crate::theme;
 use crate::types::LinkState;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -31,5 +31,5 @@ pub fn render(
         lines.push(Line::from(Span::styled(msg.to_string(), theme::status())));
     }
 
-    f.render_widget(Paragraph::new(lines), area);
+    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), area);
 }

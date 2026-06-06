@@ -51,15 +51,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(area);
 
-    // top function block
-    two_col(
-        f,
+    // top function block — centered, fixed-width 2 columns
+    f.render_widget(
+        Paragraph::new(vec![
+            pair(btn("p", "\u{23fb}", "Power"), btn("s", "\u{2699}", "Settings"), 19, 38),
+            pair(btn("h", "\u{2302}", "Home"), btn("o", "\u{2261}", "Options"), 19, 38),
+        ])
+        .alignment(Alignment::Center),
         rows[0],
-        vec![btn("p", "\u{23fb}", "Power"), btn("h", "\u{2302}", "Home")],
-        vec![
-            btn("s", "\u{2699}", "Settings"),
-            btn("o", "\u{2261}", "Options"),
-        ],
     );
 
     // D-pad with Enter (OK) in the centre — the keys ARE the cells.
@@ -69,38 +68,27 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     );
 
     // middle function block
-    two_col(
-        f,
+    f.render_widget(
+        Paragraph::new(vec![
+            pair(btn("esc", "\u{21a9}", "Back"), btn("i", "\u{229e}", "Input"), 19, 38),
+            pair(btn("v", "(o)", "Voice"), btn("k", "\u{2328}", "Type"), 19, 38),
+            pair(btn("+/-", "<))", "Volume"), btn("PgUp/Dn", "\u{25ad}", "Channel"), 19, 38),
+            pair(btn("m", "<x", "Mute"), Line::raw(""), 19, 38),
+        ])
+        .alignment(Alignment::Center),
         rows[4],
-        vec![
-            btn("esc", "\u{21a9}", "Back"),
-            btn("v", "(o)", "Voice"),
-            btn("+/-", "<))", "Volume"),
-            btn("m", "<x", "Mute"),
-        ],
-        vec![
-            btn("i", "\u{229e}", "Input"),
-            btn("k", "\u{2328}", "Type"),
-            btn("PgUp/Dn", "\u{25ad}", "Channel"),
-            Line::raw(""),
-        ],
     );
 
     // app shortcuts — not limited to the physical remote's hotkeys; any installed
     // app can get a launch shortcut via the protocol's app-link request.
-    two_col(
-        f,
+    f.render_widget(
+        Paragraph::new(vec![
+            pair(app_line("\u{24c3}", "Netflix", "1"), app_line("\u{24ce}", "YouTube", "2"), 16, 30),
+            pair(app_line("\u{24b9}", "Disney+", "3"), app_line("\u{24c2}", "Max", "4"), 16, 30),
+            pair(app_line("\u{24c9}", "TCL apps", "5"), Line::raw(""), 16, 30),
+        ])
+        .alignment(Alignment::Center),
         rows[6],
-        vec![
-            app_line("\u{24c3}", "Netflix", "1"),
-            app_line("\u{24b9}", "Disney+", "3"),
-            app_line("\u{24c9}", "TCL apps", "5"),
-        ],
-        vec![
-            app_line("\u{24ce}", "YouTube", "2"),
-            app_line("\u{24c2}", "Max", "4"),
-            Line::raw(""),
-        ],
     );
 
     // media (bonus — not on the physical RC802V, kept for streaming)
@@ -116,14 +104,25 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// Split `rect` into two columns and stack `left`/`right` lines in each.
-fn two_col(f: &mut Frame, rect: Rect, left: Vec<Line<'static>>, right: Vec<Line<'static>>) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rect);
-    f.render_widget(Paragraph::new(left), cols[0]);
-    f.render_widget(Paragraph::new(right), cols[1]);
+/// Char-count display width of a span list (all our glyphs are single-width).
+fn span_w(spans: &[Span]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// A fixed-width 2-column row: pad `left` to `lw`, append `right`, pad the whole
+/// line to `total`. Equal-width rows mean `Alignment::Center` lines the columns up.
+fn pair(left: Line<'static>, right: Line<'static>, lw: usize, total: usize) -> Line<'static> {
+    let mut spans = left.spans;
+    let used = span_w(&spans);
+    if used < lw {
+        spans.push(Span::raw(" ".repeat(lw - used)));
+    }
+    spans.extend(right.spans);
+    let used = span_w(&spans);
+    if used < total {
+        spans.push(Span::raw(" ".repeat(total - used)));
+    }
+    Line::from(spans)
 }
 
 /// The D-pad: arrows are the keys, `\u{23ce}` (Enter) sits in the centre = OK/select.
