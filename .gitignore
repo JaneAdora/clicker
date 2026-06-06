@@ -1,1 +1,9 @@
 /target
+
+# Runtime secrets: clicker writes the client cert/key and config (TV host, paired
+# state) to ~/.config/clicker/, never the repo. Ignore them here too so a stray
+# copy dropped in the working tree can never be committed by accident.
+*.pem
+*.key
+config.toml
+/.config/
