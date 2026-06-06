@@ -7,6 +7,7 @@ pub enum RemoteKey {
     VolUp, VolDown, Mute,
     PlayPause, Next, Prev, Rewind, FastForward, Stop,
     ChannelUp, ChannelDown,
+    Settings, Input, Assist,
 }
 
 impl RemoteKey {
@@ -32,6 +33,9 @@ impl RemoteKey {
             RemoteKey::Stop => 86,
             RemoteKey::ChannelUp => 166,
             RemoteKey::ChannelDown => 167,
+            RemoteKey::Settings => 176,    // KEYCODE_SETTINGS
+            RemoteKey::Input => 178,       // KEYCODE_TV_INPUT
+            RemoteKey::Assist => 219,      // KEYCODE_ASSIST (opens Google Assistant)
         }
     }
 }
@@ -65,7 +69,6 @@ pub enum LinkState {
 #[derive(Debug)]
 pub enum InputMode {
     Normal,
-    Help,
     HostEntry { entered: String },
     PinEntry { entered: String, error: Option<String> },
 }

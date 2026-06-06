@@ -25,46 +25,6 @@ pub fn centered_rect(parent: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(v[1])[1]
 }
 
-const HELP_TEXT: &[(&str, &str)] = &[
-    ("\u{2191}\u{2193}\u{2190}\u{2192}", "D-pad"),
-    ("Enter", "Select (center)"),
-    ("Backspace", "Back"),
-    ("Home / g", "Home"),
-    ("o", "Menu / Options"),
-    ("+  /  -", "Volume up / down"),
-    ("m", "Mute"),
-    ("Space", "Play / Pause"),
-    ("n  /  p", "Next / Previous"),
-    (",  /  .", "Rewind / Fast-forward"),
-    ("s", "Stop"),
-    ("PgUp / PgDn", "Channel up / down"),
-    ("Shift+P", "Power"),
-    ("i", "Type mode (v1.1)"),
-    ("?", "This help"),
-    ("q", "Quit clicker"),
-];
-
-pub fn render_help(f: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .title(Line::from(Span::styled(" help ", theme::pane_header_focused())))
-        .borders(Borders::ALL)
-        .border_style(theme::pane_header());
-    f.render_widget(Clear, area);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let lines: Vec<Line> = HELP_TEXT
-        .iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                Span::styled(format!(" {key:<11} "), theme::pane_header_focused()),
-                Span::styled((*desc).to_string(), theme::dim()),
-            ])
-        })
-        .collect();
-    f.render_widget(Paragraph::new(lines), inner);
-}
-
 /// First-run PIN entry. Input masked with '•'; error line in alert() on a bad PIN.
 pub fn render_pin(f: &mut Frame, area: Rect, entered: &str, error: Option<&str>) {
     let block = Block::default()

@@ -30,10 +30,6 @@ pub fn render(f: &mut Frame, app: &App) {
     // Modal overlay drawn LAST so it sits on top.
     match &app.mode {
         InputMode::Normal => {}
-        InputMode::Help => {
-            let area = modal::centered_rect(f.area(), 60, 70);
-            modal::render_help(f, area);
-        }
         InputMode::HostEntry { entered } => {
             let area = modal::centered_rect(f.area(), 50, 40);
             modal::render_host(f, area, entered);

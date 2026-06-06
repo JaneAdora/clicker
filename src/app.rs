@@ -282,19 +282,13 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     match &app.mode {
         // First-run host capture and PIN capture share the same keystroke handling.
         InputMode::HostEntry { .. } | InputMode::PinEntry { .. } => handle_pin_key(app, key),
-        InputMode::Help => {
-            // Any key closes the help overlay (roam modal convention).
-            app.mode = InputMode::Normal;
-            KeyOutcome::Redraw
-        }
         InputMode::Normal => match keymap::map_normal(key) {
             Some(Action::Quit) => KeyOutcome::Quit,
-            Some(Action::ShowHelp) => {
-                app.mode = InputMode::Help;
+            Some(Action::EnterTextMode) => {
+                // IME text entry lands in v1.1; say so rather than silently ignoring.
+                app.toast("text entry (k) — coming in v1.1");
                 KeyOutcome::Redraw
             }
-            Some(Action::CloseModal) => KeyOutcome::Ignored, // nothing open in Normal
-            Some(Action::EnterTextMode) => KeyOutcome::Ignored, // v1.1 IME; no-op in v1
             Some(Action::Cmd(cmd)) => {
                 if app.cmd_tx.try_send(cmd).is_err() {
                     app.toast("link busy — key dropped");
