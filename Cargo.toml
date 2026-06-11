@@ -3,7 +3,12 @@
 name = "clicker"
 version = "0.1.0"
 edition = "2021"
-description = "A terminal Android TV remote, native to the Rust TUI suite."
+description = "A terminal Android TV / Google TV remote speaking the native Remote protocol v2."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JaneAdora/clicker"
+readme = "README.md"
+keywords = ["android-tv", "google-tv", "remote", "tui", "terminal"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
