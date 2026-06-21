@@ -42,5 +42,12 @@ pub fn render(f: &mut Frame, app: &App) {
             let area = modal::centered_rect(f.area(), 66, 64);
             modal::render_probe(f, area, entered, last.as_deref());
         }
+        InputMode::TextInput {
+            buffer,
+            field_active,
+        } => {
+            let area = modal::centered_rect(f.area(), 60, 36);
+            modal::render_text_input(f, area, buffer, *field_active);
+        }
     }
 }

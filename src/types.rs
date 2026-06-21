@@ -46,6 +46,8 @@ pub enum TvCmd {
     RawKey(i32), // arbitrary Android keycode (from the debug probe)
     LaunchApp(String),
     SubmitPin(String),
+    SetImeText(String), // live text-entry: set the focused field's contents (IME)
+    SubmitText,         // commit the typed query (KEYCODE_ENTER)
 }
 
 #[derive(Debug)]
@@ -56,6 +58,8 @@ pub enum TvEvent {
     PairingRequired,
     PairingOk,
     PairingFailed(String),
+    /// The TV reports a text field is focused (IME) and ready for input.
+    TextFieldActive(bool),
     Error(String),
 }
 
@@ -73,6 +77,9 @@ pub enum InputMode {
     HostEntry { entered: String },
     PinEntry { entered: String, error: Option<String> },
     KeyProbe { entered: String, last: Option<String> },
+    /// Live text entry: `buffer` mirrors to the TV's focused field via IME;
+    /// `field_active` tracks whether the TV currently has a field focused.
+    TextInput { buffer: String, field_active: bool },
 }
 
 #[cfg(test)]

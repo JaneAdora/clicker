@@ -39,9 +39,11 @@ const REMOTE_PORT: u16 = 6466;
 /// NOT `-1` (which would over-advertise IME/voice/etc. we don't handle). The bit
 /// values come from the tronikos `androidtvremote2` reference `RemoteFeature`
 /// constants (the proto here carries no `RemoteFeature` enum to derive them from):
-///   PING = 1, KEY = 2, POWER = 32, VOLUME = 64, APP_LINK = 512.
-/// PING | KEY | POWER | VOLUME | APP_LINK = 1 | 2 | 32 | 64 | 512 = 611.
-const CLIENT_FEATURES: i32 = 0b1001100011; // = 611
+///   PING = 1, KEY = 2, IME = 4, POWER = 32, VOLUME = 64, APP_LINK = 512.
+/// PING | KEY | IME | POWER | VOLUME | APP_LINK = 1 | 2 | 4 | 32 | 64 | 512 = 615.
+/// IME is advertised so the TV sends the field-status / batch-edit messages the
+/// live typing mode (P3) needs to learn the ime/field counters.
+const CLIENT_FEATURES: i32 = 0b1001100111; // = 615
 
 /// Pure: decode-side mapping of an inbound RemoteMessage to an optional UI event.
 /// Unit-tested below; keeps the select loop free of branching logic.
@@ -53,7 +55,33 @@ pub fn message_to_event(msg: &rm::RemoteMessage) -> Option<TvEvent> {
             muted: v.volume_muted,
         });
     }
+    // The TV showing its on-screen keyboard means a text field is focused.
+    if msg.remote_ime_show_request.is_some() {
+        return Some(TvEvent::TextFieldActive(true));
+    }
     None
+}
+
+/// Build a RemoteImeBatchEdit that sets the focused field's contents to `text`.
+/// Mirrors the tronikos androidtvremote2 `send_text`: `insert = 1`, cursor
+/// (`start == end`) at `len-1`, `value` = the full text. `ime_counter` /
+/// `field_counter` are learned from the TV's inbound IME messages, not invented.
+fn batch_edit(ime_counter: i32, field_counter: i32, text: &str) -> rm::RemoteMessage {
+    let cursor = text.chars().count().saturating_sub(1) as i32;
+    let mut m = rm::RemoteMessage::default();
+    m.remote_ime_batch_edit = Some(rm::RemoteImeBatchEdit {
+        ime_counter,
+        field_counter,
+        edit_info: vec![rm::RemoteEditInfo {
+            insert: 1,
+            text_field_status: Some(rm::RemoteImeObject {
+                start: cursor,
+                end: cursor,
+                value: text.to_string(),
+            }),
+        }],
+    });
+    m
 }
 
 fn encode(msg: rm::RemoteMessage) -> Vec<u8> {
@@ -287,6 +315,11 @@ async fn serve_handshake_and_loop(
     };
     ev_tx.send(TvEvent::Connected { name }).await.ok();
 
+    // IME counters learned from the TV's inbound messages (never client-invented).
+    // The outbound batch edit must echo whatever the TV last advertised.
+    let mut ime_counter = 0i32;
+    let mut field_counter = 0i32;
+
     // --- §4.3.3-5 steady-state serve loop. Single writer (`wr`); inbound arrives
     //     only via `inbound_rx`. No raw framing read future in this select. ---
     loop {
@@ -303,7 +336,18 @@ async fn serve_handshake_and_loop(
                     answer_ping(wr, ping.val1).await?;
                     continue;
                 }
-                // state updates -> UI events (volume, …)
+                // learn the IME counters from the TV (batch-edit echoes them; the
+                // show-request carries the field counter).
+                if let Some(be) = &msg.remote_ime_batch_edit {
+                    ime_counter = be.ime_counter;
+                    field_counter = be.field_counter;
+                }
+                if let Some(sr) = &msg.remote_ime_show_request {
+                    if let Some(fs) = &sr.remote_text_field_status {
+                        field_counter = fs.counter_field;
+                    }
+                }
+                // state updates -> UI events (volume, text-field-active, …)
                 if let Some(ev) = message_to_event(&msg) {
                     ev_tx.send(ev).await.ok();
                 }
@@ -316,6 +360,12 @@ async fn serve_handshake_and_loop(
                     Some(TvCmd::LaunchApp(url)) => {
                         write_msg(wr, &encode(applink_message(url))).await?
                     }
+                    // live typing: replace the focused field's text (IME batch edit)
+                    Some(TvCmd::SetImeText(s)) => {
+                        write_msg(wr, &encode(batch_edit(ime_counter, field_counter, &s))).await?
+                    }
+                    // commit the query: KEYCODE_ENTER (66)
+                    Some(TvCmd::SubmitText) => write_msg(wr, &encode(inject(66))).await?,
                     // a stray PIN after pairing: ignore
                     Some(TvCmd::SubmitPin(_)) => {}
                     None => return Ok(()), // UI dropped the sender -> clean exit
@@ -420,5 +470,40 @@ mod tests {
         let mut msg = rm::RemoteMessage::default();
         msg.remote_ping_request = Some(rm::RemotePingRequest { val1: 7, ..Default::default() });
         assert!(message_to_event(&msg).is_none());
+    }
+
+    #[test]
+    fn batch_edit_sets_field_text() {
+        let m = batch_edit(2, 5, "hello");
+        let be = m.remote_ime_batch_edit.expect("batch edit set");
+        assert_eq!(be.ime_counter, 2);
+        assert_eq!(be.field_counter, 5);
+        let ei = &be.edit_info[0];
+        assert_eq!(ei.insert, 1);
+        let obj = ei.text_field_status.as_ref().expect("ime object");
+        assert_eq!(obj.value, "hello");
+        assert_eq!(obj.start, 4); // cursor at len-1 (tronikos behavior)
+        assert_eq!(obj.end, 4);
+    }
+
+    #[test]
+    fn empty_text_does_not_underflow() {
+        let m = batch_edit(0, 0, "");
+        let obj = m.remote_ime_batch_edit.unwrap().edit_info[0]
+            .text_field_status
+            .clone()
+            .unwrap();
+        assert_eq!(obj.start, 0); // saturating, not -1
+        assert_eq!(obj.value, "");
+    }
+
+    #[test]
+    fn ime_show_marks_field_active() {
+        let mut msg = rm::RemoteMessage::default();
+        msg.remote_ime_show_request = Some(rm::RemoteImeShowRequest::default());
+        assert!(matches!(
+            message_to_event(&msg),
+            Some(TvEvent::TextFieldActive(true))
+        ));
     }
 }

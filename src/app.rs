@@ -18,6 +18,9 @@ pub struct App {
     pub cmd_tx: Sender<TvCmd>,
     /// Swipe/drag gesture accumulator (P4) — turns touch drags into D-pad moves.
     pub gesture: Gesture,
+    /// Last-known IME field-focused state (P3), so entering typing mode knows
+    /// whether to show the "focus a search box first" hint.
+    pub field_active: bool,
 }
 
 /// Drag-delta swipe recognizer. Mouse capture turns a touch swipe into a
@@ -110,6 +113,7 @@ impl App {
             transient: None,
             cmd_tx,
             gesture: Gesture::new(),
+            field_active: false,
         }
     }
 
@@ -146,6 +150,12 @@ impl App {
                     entered: String::new(),
                     error: Some(msg),
                 };
+            }
+            TvEvent::TextFieldActive(active) => {
+                self.field_active = active;
+                if let InputMode::TextInput { field_active, .. } = &mut self.mode {
+                    *field_active = active;
+                }
             }
             TvEvent::Error(msg) => {
                 self.link = LinkState::Down;
@@ -395,6 +405,12 @@ enum KeyOutcome {
 /// Dispatch a keypress by the current `InputMode`. Synchronous: only `try_send`
 /// onto the cmd channel, never `.await` — the draw path must never block.
 fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    // Live typing mode owns ALL keys (so a literal 'q' types instead of quitting);
+    // it handles Ctrl-C itself. Dispatch it BEFORE the global-q shortcut.
+    if matches!(app.mode, InputMode::TextInput { .. }) {
+        return handle_text_input_key(app, key);
+    }
+
     // GLOBAL quit, available in EVERY mode (Normal, Help, HostEntry, PinEntry).
     // Without this, Esc in PinEntry would drop to Normal while the connection task
     // blocks forever waiting for a SubmitPin that can no longer arrive — the only
@@ -411,6 +427,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         // First-run host capture and PIN capture share the same keystroke handling.
         InputMode::HostEntry { .. } | InputMode::PinEntry { .. } => handle_pin_key(app, key),
         InputMode::KeyProbe { .. } => handle_probe_key(app, key),
+        // TextInput is dispatched earlier (before global-q); unreachable here.
+        InputMode::TextInput { .. } => KeyOutcome::Ignored,
         InputMode::Normal => match keymap::map_normal(key) {
             Some(Action::Quit) => KeyOutcome::Quit,
             Some(Action::EnterProbe) => {
@@ -421,8 +439,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 KeyOutcome::Redraw
             }
             Some(Action::EnterTextMode) => {
-                // Real live-IME typing mode lands in P3; placeholder until then.
-                app.toast("typing mode — coming next");
+                app.mode = InputMode::TextInput {
+                    buffer: String::new(),
+                    field_active: app.field_active,
+                };
                 KeyOutcome::Redraw
             }
             Some(Action::Launch(d)) => {
@@ -520,6 +540,56 @@ fn handle_pin_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 buf.push(c);
             }
             app.mode = rebuild(buf, None);
+            KeyOutcome::Redraw
+        }
+        _ => KeyOutcome::Ignored,
+    }
+}
+
+/// Live typing mode: every printable char appends to the buffer and mirrors to the
+/// TV's focused field via IME (`SetImeText`). Backspace edits; Enter submits the
+/// query (`SubmitText`) and exits; Esc exits without submitting. Only Ctrl-C quits
+/// clicker here, so a literal 'q' types normally.
+fn handle_text_input_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    let (mut buffer, field_active) = match &app.mode {
+        InputMode::TextInput {
+            buffer,
+            field_active,
+        } => (buffer.clone(), *field_active),
+        _ => return KeyOutcome::Ignored,
+    };
+
+    // Ctrl-C is the ONLY quit inside text mode.
+    if matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return KeyOutcome::Quit;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = InputMode::Normal;
+            KeyOutcome::Redraw
+        }
+        KeyCode::Enter => {
+            let _ = app.cmd_tx.try_send(TvCmd::SubmitText);
+            app.mode = InputMode::Normal;
+            KeyOutcome::Redraw
+        }
+        KeyCode::Backspace => {
+            buffer.pop();
+            let _ = app.cmd_tx.try_send(TvCmd::SetImeText(buffer.clone()));
+            app.mode = InputMode::TextInput {
+                buffer,
+                field_active,
+            };
+            KeyOutcome::Redraw
+        }
+        KeyCode::Char(c) if !c.is_control() => {
+            buffer.push(c);
+            let _ = app.cmd_tx.try_send(TvCmd::SetImeText(buffer.clone()));
+            app.mode = InputMode::TextInput {
+                buffer,
+                field_active,
+            };
             KeyOutcome::Redraw
         }
         _ => KeyOutcome::Ignored,
@@ -681,5 +751,75 @@ mod tests {
         let mut g = Gesture::new();
         g.feed(Down(Left), 10, 20);
         assert_eq!(g.feed(Drag(Left), 10, 16), Some(RemoteKey::Up)); // dy=-4, vertical dominant
+    }
+
+    fn ev_char(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn typing_builds_buffer() {
+        let mut app = test_app();
+        app.mode = InputMode::TextInput {
+            buffer: String::new(),
+            field_active: true,
+        };
+        handle_text_input_key(&mut app, ev_char('h'));
+        handle_text_input_key(&mut app, ev_char('i'));
+        match &app.mode {
+            InputMode::TextInput { buffer, .. } => assert_eq!(buffer, "hi"),
+            _ => panic!("left text mode unexpectedly"),
+        }
+    }
+
+    #[test]
+    fn enter_submits_and_exits_text_mode() {
+        let mut app = test_app();
+        app.mode = InputMode::TextInput {
+            buffer: "hi".into(),
+            field_active: true,
+        };
+        let out = handle_text_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(matches!(out, KeyOutcome::Redraw));
+        assert!(matches!(app.mode, InputMode::Normal));
+    }
+
+    #[test]
+    fn q_types_not_quits_in_text_mode() {
+        let mut app = test_app();
+        app.mode = InputMode::TextInput {
+            buffer: String::new(),
+            field_active: true,
+        };
+        let out = handle_key(&mut app, ev_char('q'));
+        assert!(matches!(out, KeyOutcome::Redraw)); // typed, NOT Quit
+        match &app.mode {
+            InputMode::TextInput { buffer, .. } => assert_eq!(buffer, "q"),
+            _ => panic!("q should have been typed"),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_still_quits_text_mode() {
+        let mut app = test_app();
+        app.mode = InputMode::TextInput {
+            buffer: String::new(),
+            field_active: true,
+        };
+        let out = handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(out, KeyOutcome::Quit));
+    }
+
+    #[test]
+    fn text_field_active_event_tracked() {
+        let mut app = test_app();
+        app.apply_tv_event(TvEvent::TextFieldActive(true));
+        assert!(app.field_active);
     }
 }

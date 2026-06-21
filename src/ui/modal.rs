@@ -103,6 +103,40 @@ pub fn render_probe(f: &mut Frame, area: Rect, entered: &str, last: Option<&str>
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Live typing mode: what you type mirrors to the TV's focused field via IME.
+/// Shows the buffer with a cursor, and a hint when no field is focused yet.
+pub fn render_text_input(f: &mut Frame, area: Rect, buffer: &str, field_active: bool) {
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " type on TV ",
+            theme::pane_header_focused(),
+        )))
+        .borders(Borders::ALL)
+        .border_style(theme::pane_header());
+    f.render_widget(Clear, area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Type — it appears on the TV. Enter sends, Esc cancels.",
+            theme::dim(),
+        )),
+        Line::from(Span::styled(
+            format!(" {buffer}\u{2588}"), // trailing block as a cursor
+            theme::pane_header(),
+        )),
+    ];
+    if !field_active {
+        lines.push(Line::from(Span::raw("")));
+        lines.push(Line::from(Span::styled(
+            "focus a search box on the TV first",
+            theme::alert(),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 /// First-run host (TV IP) entry. NOT masked — an IP address is not a secret.
 /// Distinct title/prompt from the PIN modal so the two are never confused.
 pub fn render_host(f: &mut Frame, area: Rect, entered: &str) {
