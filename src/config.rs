@@ -9,6 +9,64 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// How an app shortcut launches. Both kinds currently serialize their `target`
+/// string into `RemoteAppLinkLaunchRequest.app_link`; the distinction is kept so
+/// config stays expressive (and so a future launch-by-package path is easy to add).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LaunchKind {
+    #[default]
+    Url,
+    Package,
+}
+
+/// One configurable app shortcut (a digit 0-9 -> app).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shortcut {
+    pub label: String,
+    #[serde(default)]
+    pub kind: LaunchKind,
+    pub target: String,
+}
+
+/// One paired/known TV. The shared client cert is paired with each of these.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceEntry {
+    /// Stable slug used as the registry key (generated from `name`).
+    pub id: String,
+    /// Display name (from mDNS or pairing).
+    pub name: String,
+    /// TV IP or hostname.
+    pub host: String,
+    /// Whether the shared client cert is trusted by this TV.
+    #[serde(default)]
+    pub paired: bool,
+    /// Per-device last volume, restored into the UI on connect.
+    pub last_volume: Option<u8>,
+}
+
+/// Turn a display name into a stable registry id: lowercase, runs of
+/// non-alphanumerics collapse to a single `-`, trimmed; empty -> `"tv"`.
+pub fn slugify(name: &str) -> String {
+    let mut s = String::new();
+    let mut prev_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            s.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = s.trim_matches('-');
+    if trimmed.is_empty() {
+        "tv".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// TV IP or mDNS name. `None` on first run → triggers the host prompt (I2/I3).
@@ -65,6 +123,14 @@ fn save_to(dir: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slugify_makes_stable_ids() {
+        assert_eq!(slugify("Living Room TV"), "living-room-tv");
+        assert_eq!(slugify("Android TV"), "android-tv");
+        assert_eq!(slugify("  !!  "), "tv");
+        assert_eq!(slugify("Bedroom"), "bedroom");
+    }
 
     /// `save_to` then `load_from` must round-trip every field. Each test gets its
     /// OWN `tempfile::tempdir()`, and we exercise the path-parameterized helpers
