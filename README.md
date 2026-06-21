@@ -187,7 +187,7 @@ last_device = "living-room"
 [[device]]
 id = "living-room"
 name = "Living Room"
-host = "192.168.0.157"
+host = "192.168.1.50"
 paired = true
 ```
 

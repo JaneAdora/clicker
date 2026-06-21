@@ -69,7 +69,7 @@ last_device = "living-room"     # auto-connect target on launch (optional)
 [[device]]
 id        = "living-room"       # stable slug; generated from name on first save
 name      = "Living Room"       # display name (from mDNS TXT or pairing)
-host      = "192.168.0.157"
+host      = "192.168.1.50"
 paired    = true
 last_volume = 13                # per-device
 

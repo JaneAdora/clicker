@@ -256,7 +256,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             tmp.path().join("config.toml"),
-            "host = \"192.168.0.157\"\nname = \"Android TV\"\npaired = true\nlast_volume = 13\n",
+            "host = \"192.168.1.50\"\nname = \"Android TV\"\npaired = true\nlast_volume = 13\n",
         )
         .unwrap();
 
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(cfg.devices.len(), 1);
         let d = &cfg.devices[0];
         assert_eq!(d.id, "android-tv");
-        assert_eq!(d.host, "192.168.0.157");
+        assert_eq!(d.host, "192.168.1.50");
         assert!(d.paired);
         assert_eq!(d.last_volume, Some(13));
         assert_eq!(cfg.last_device.as_deref(), Some("android-tv"));
@@ -273,7 +273,7 @@ mod tests {
         // (no top-level `host`), so it still has exactly one device.
         let again = load_from(tmp.path());
         assert_eq!(again.devices.len(), 1);
-        assert_eq!(again.active_device().unwrap().host, "192.168.0.157");
+        assert_eq!(again.active_device().unwrap().host, "192.168.1.50");
     }
 
     #[test]

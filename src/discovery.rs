@@ -88,10 +88,10 @@ mod tests {
     fn parses_instance_name() {
         let f = parse_service(
             "Living Room._androidtvremote2._tcp.local.",
-            "192.168.0.157".parse().unwrap(),
+            "192.168.1.50".parse().unwrap(),
         );
         assert_eq!(f.name, "Living Room");
-        assert_eq!(f.host, "192.168.0.157");
+        assert_eq!(f.host, "192.168.1.50");
     }
 
     #[test]
