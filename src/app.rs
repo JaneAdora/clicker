@@ -1,6 +1,6 @@
 // src/app.rs
 use crate::config::{Config, DeviceEntry};
-use crate::types::{InputMode, LinkState, TvCmd, TvEvent};
+use crate::types::{InputMode, LinkState, RemoteKey, TvCmd, TvEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 
@@ -16,6 +16,81 @@ pub struct App {
     pub mode: InputMode,
     pub transient: Option<(String, Instant)>,
     pub cmd_tx: Sender<TvCmd>,
+    /// Swipe/drag gesture accumulator (P4) — turns touch drags into D-pad moves.
+    pub gesture: Gesture,
+}
+
+/// Drag-delta swipe recognizer. Mouse capture turns a touch swipe into a
+/// Down → Drag* → Up sequence (Termux does NOT emit horizontal wheel-scroll, so
+/// `ScrollLeft/Right` alone can't carry left/right). This accumulates drag from an
+/// anchor and emits ONE D-pad direction each time a segment crosses the threshold,
+/// resetting the anchor so a long continuous drag keeps stepping.
+#[derive(Default)]
+pub struct Gesture {
+    anchor: Option<(u16, u16)>,
+}
+
+impl Gesture {
+    pub fn new() -> Self {
+        Gesture::default()
+    }
+
+    /// Feed a mouse event (kind + absolute column/row). Returns a D-pad key when a
+    /// drag segment exceeds the threshold; `None` otherwise.
+    pub fn feed(
+        &mut self,
+        kind: crossterm::event::MouseEventKind,
+        col: u16,
+        row: u16,
+    ) -> Option<RemoteKey> {
+        use crossterm::event::MouseEventKind::*;
+        const THRESH: i32 = 3; // cells of travel before a step fires
+        match kind {
+            Down(_) => {
+                self.anchor = Some((col, row));
+                None
+            }
+            Drag(_) => {
+                let (ax, ay) = self.anchor.get_or_insert((col, row));
+                let dx = col as i32 - *ax as i32;
+                let dy = row as i32 - *ay as i32;
+                if dx.abs() < THRESH && dy.abs() < THRESH {
+                    return None;
+                }
+                let key = if dx.abs() >= dy.abs() {
+                    if dx > 0 {
+                        RemoteKey::Right
+                    } else {
+                        RemoteKey::Left
+                    }
+                } else if dy > 0 {
+                    RemoteKey::Down
+                } else {
+                    RemoteKey::Up
+                };
+                *ax = col; // reset anchor so a long drag steps repeatedly
+                *ay = row;
+                Some(key)
+            }
+            Up(_) => {
+                self.anchor = None;
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Wheel-scroll → D-pad (desktop bonus; horizontal scroll is rare but free).
+pub fn mouse_to_key(kind: crossterm::event::MouseEventKind) -> Option<RemoteKey> {
+    use crossterm::event::MouseEventKind::*;
+    match kind {
+        ScrollUp => Some(RemoteKey::Up),
+        ScrollDown => Some(RemoteKey::Down),
+        ScrollLeft => Some(RemoteKey::Left),
+        ScrollRight => Some(RemoteKey::Right),
+        _ => None,
+    }
 }
 
 impl App {
@@ -34,6 +109,7 @@ impl App {
             mode: InputMode::Normal,
             transient: None,
             cmd_tx,
+            gesture: Gesture::new(),
         }
     }
 
@@ -188,6 +264,20 @@ pub async fn run<B: Backend>(
                             }
                             KeyOutcome::Redraw => dirty = true,
                             KeyOutcome::Ignored => {}
+                        }
+                    }
+                    Some(Ok(Event::Mouse(m))) => {
+                        // Swipe/scroll -> D-pad, only in Normal mode (modals keep
+                        // the mouse for their own navigation later).
+                        if matches!(app.mode, InputMode::Normal) {
+                            let key = mouse_to_key(m.kind)
+                                .or_else(|| app.gesture.feed(m.kind, m.column, m.row));
+                            if let Some(k) = key {
+                                if app.cmd_tx.try_send(TvCmd::Key(k)).is_err() {
+                                    app.toast("link busy — key dropped");
+                                }
+                                dirty = true;
+                            }
                         }
                     }
                     Some(Ok(Event::Resize(_, _))) => dirty = true,
@@ -561,5 +651,35 @@ mod tests {
         app.toast("hi");
         app.tick();
         assert!(app.transient.is_some());
+    }
+
+    #[test]
+    fn scroll_maps_to_dpad() {
+        use crossterm::event::MouseEventKind::*;
+        assert_eq!(mouse_to_key(ScrollUp), Some(RemoteKey::Up));
+        assert_eq!(mouse_to_key(ScrollDown), Some(RemoteKey::Down));
+        assert_eq!(mouse_to_key(ScrollLeft), Some(RemoteKey::Left));
+        assert_eq!(mouse_to_key(ScrollRight), Some(RemoteKey::Right));
+        assert_eq!(mouse_to_key(Moved), None);
+    }
+
+    #[test]
+    fn drag_right_steps_after_threshold() {
+        use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        let mut g = Gesture::new();
+        assert_eq!(g.feed(Down(Left), 10, 10), None);
+        assert_eq!(g.feed(Drag(Left), 11, 10), None); // dx=1 < 3
+        assert_eq!(g.feed(Drag(Left), 14, 10), Some(RemoteKey::Right)); // dx=4
+        // anchor reset → a continued drag steps again
+        assert_eq!(g.feed(Drag(Left), 17, 10), Some(RemoteKey::Right));
+        assert_eq!(g.feed(Up(Left), 17, 10), None);
+    }
+
+    #[test]
+    fn drag_up_emits_up() {
+        use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        let mut g = Gesture::new();
+        g.feed(Down(Left), 10, 20);
+        assert_eq!(g.feed(Drag(Left), 10, 16), Some(RemoteKey::Up)); // dy=-4, vertical dominant
     }
 }

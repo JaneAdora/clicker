@@ -61,11 +61,22 @@ fn main() -> Result<()> {
 
     // ---- terminal lifecycle (roam ordering: panic hook FIRST, restore before unwrap) ----
     suite_term::panic::install_panic_hook();
+    // Also disable mouse capture on panic: suite_term's hook restores the screen
+    // but not mouse reporting. Chain (run first), then defer to the previous hook.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture
+        );
+        prev_hook(info);
+    }));
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture,
         crossterm::terminal::SetTitle("clicker"),
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
@@ -76,7 +87,11 @@ fn main() -> Result<()> {
     let result = rt.block_on(app::run(&mut terminal, cfg, identity));
 
     // ---- restore terminal BEFORE propagating the loop's result ----
-    crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::DisableMouseCapture,
+        crossterm::terminal::LeaveAlternateScreen,
+    )?;
     crossterm::terminal::disable_raw_mode()?;
     let _ = terminal.show_cursor();
 
