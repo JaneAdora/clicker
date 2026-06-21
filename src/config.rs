@@ -77,19 +77,18 @@ pub fn default_shortcuts() -> BTreeMap<String, Shortcut> {
         kind: LaunchKind::Url,
         target: t.into(),
     };
-    let pkg = |label: &str, t: &str| Shortcut {
-        label: label.into(),
-        kind: LaunchKind::Package,
-        target: t.into(),
-    };
+    // Defaults are all deep-link URLs: a bare package name as the app-link is
+    // rejected by some TVs (they close the connection), whereas a well-formed URL
+    // is at worst a no-op. `kind = "package"` is still supported for TVs that
+    // accept it — set it explicitly in config if yours does.
     BTreeMap::from([
         ("1".into(), url("Netflix", "https://www.netflix.com/title")),
         ("2".into(), url("YouTube", "https://www.youtube.com")),
-        ("3".into(), pkg("Disney+", "com.disney.disneyplus")),
-        ("4".into(), pkg("Max", "com.wbd.stream")),
-        ("5".into(), pkg("Amazon", "com.amazon.amazonvideo.livingroom")),
-        ("6".into(), pkg("Hulu", "com.hulu.plus")),
-        ("7".into(), pkg("Spotify", "com.spotify.tv.android")),
+        ("3".into(), url("Disney+", "https://www.disneyplus.com")),
+        ("4".into(), url("Max", "https://play.max.com")),
+        ("5".into(), url("Amazon", "https://app.primevideo.com")),
+        ("6".into(), url("Hulu", "https://www.hulu.com")),
+        ("7".into(), url("Spotify", "https://open.spotify.com")),
     ])
 }
 

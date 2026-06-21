@@ -150,12 +150,15 @@ Hulu, Spotify on `1`–`7` (`8`, `9`, `0` are open). Override or add any slot in
 
 ```toml
 [shortcuts]
-"8" = { label = "Plex",        kind = "package", target = "com.plexapp.android" }
-"9" = { label = "Crunchyroll", kind = "url",     target = "https://www.crunchyroll.com" }
+"8" = { label = "Plex",        target = "https://app.plex.tv" }   # kind defaults to "url"
+"9" = { label = "Crunchyroll", target = "https://www.crunchyroll.com" }
 ```
 
-`kind = "url"` sends a deep-link URL; `kind = "package"` sends an Android package id
-(launches on Play-Store devices). Both go out as `RemoteAppLinkLaunchRequest`.
+`kind = "url"` (the default, used by all built-in shortcuts) sends a deep-link URL —
+the reliable option. `kind = "package"` sends a bare Android package id, which some
+TVs accept and others **reject by closing the connection**, so use it only if a URL
+won't launch your app. Both go out as `RemoteAppLinkLaunchRequest`; clicker
+auto-reconnects if a launch ever drops the link.
 
 ## Swipe
 

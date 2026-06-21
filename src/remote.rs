@@ -327,8 +327,12 @@ async fn serve_handshake_and_loop(
             // inbound, already framed + decoded by the read task
             inbound = inbound_rx.recv() => {
                 let Some(msg) = inbound else {
-                    // read task ended (socket error / EOF) -> disconnect, reconnect
-                    return Ok(());
+                    // Read task ended: the TV closed the socket (EOF / error), e.g.
+                    // after rejecting an app-link launch. Return Err so the outer
+                    // loop reconnects automatically instead of exiting the task —
+                    // returning Ok here is the "UI quit" signal and would strand the
+                    // link until a manual reconnect.
+                    return Err(anyhow::anyhow!("connection closed by TV"));
                 };
 
                 // keepalive: answer ping immediately (§4.3.3)
