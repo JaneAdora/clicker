@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_rustls::client::TlsStream;
 
 use crate::cert::ClientIdentity;
-use crate::config::{self, Config};
+use crate::config::{Config, DeviceEntry};
 use crate::framing::{read_msg, write_msg};
 use crate::proto::remotemessage as rm;
 use crate::types::{RemoteKey, TvCmd, TvEvent};
@@ -94,27 +94,26 @@ pub async fn run_connection(
     mut cmd_rx: Receiver<TvCmd>,
     ev_tx: Sender<TvEvent>,
 ) {
-    let host = match cfg.host.clone() {
-        Some(h) => h,
+    let device = match cfg.active_device() {
+        Some(d) => d.clone(),
         None => {
-            let _ = ev_tx.send(TvEvent::Error("no TV host configured".into())).await;
+            let _ = ev_tx.send(TvEvent::Error("no TV selected".into())).await;
             return;
         }
     };
+    let host = device.host.clone();
 
-    // --- pairing phase (§4.2) if not yet paired ---
-    let mut cfg = cfg;
-    if !cfg.paired {
+    // --- pairing phase (§4.2) if not yet paired. App is the SOLE config writer,
+    //     so we do NOT save here: emit PairingOk and the UI persists paired=true
+    //     onto the active device entry (saving here from a stale clone would
+    //     clobber the device registry / shortcuts). ---
+    if !device.paired {
         // Open the PIN modal once; a wrong PIN keeps it open and re-runs `begin()`
         // (the TV shows a fresh code) instead of stranding the UI in a dead modal.
         let _ = ev_tx.send(TvEvent::PairingRequired).await;
         loop {
             match pair_attempt(&host, &id, &mut cmd_rx).await {
                 PairStep::Paired => {
-                    cfg.paired = true;
-                    if let Err(e) = config::save(&cfg) {
-                        let _ = ev_tx.send(TvEvent::Error(format!("save config: {e}"))).await;
-                    }
                     let _ = ev_tx.send(TvEvent::PairingOk).await;
                     break;
                 }
@@ -129,7 +128,7 @@ pub async fn run_connection(
 
     // --- remote connect + serve, with reconnect on socket error ---
     loop {
-        match serve_once(&host, &cfg, &id, &mut cmd_rx, &ev_tx).await {
+        match serve_once(&host, &device, &id, &mut cmd_rx, &ev_tx).await {
             Ok(()) => {
                 // cmd channel closed (UI quit) -> exit task cleanly
                 let _ = ev_tx.send(TvEvent::Disconnected).await;
@@ -221,7 +220,7 @@ async fn read_task(
 /// way for a cancelled read to strand bytes.
 async fn serve_once(
     host: &str,
-    cfg: &Config,
+    device: &DeviceEntry,
     id: &ClientIdentity,
     cmd_rx: &mut Receiver<TvCmd>,
     ev_tx: &Sender<TvEvent>,
@@ -238,7 +237,7 @@ async fn serve_once(
     // Run the handshake + wait-for-remote_start phase. Anything that goes wrong
     // (channel closed early = read task died, protocol violation) is a session
     // error: abort the reader and propagate so the outer loop reconnects.
-    let result = serve_handshake_and_loop(cfg, cmd_rx, ev_tx, &mut wr, &mut inbound_rx).await;
+    let result = serve_handshake_and_loop(device, cmd_rx, ev_tx, &mut wr, &mut inbound_rx).await;
     reader.abort();
     result
 }
@@ -246,7 +245,7 @@ async fn serve_once(
 /// Handshake (§4.3.2) → wait for `remote_start` (§4.3.x) → steady-state loop.
 /// Split out so `serve_once` can always abort the read task afterwards.
 async fn serve_handshake_and_loop(
-    cfg: &Config,
+    device: &DeviceEntry,
     cmd_rx: &mut Receiver<TvCmd>,
     ev_tx: &Sender<TvEvent>,
     wr: &mut WriteHalf<TlsStream<TcpStream>>,
@@ -281,12 +280,12 @@ async fn serve_handshake_and_loop(
     }
 
     // remote_start seen → NOW we're ready to accept commands.
-    ev_tx
-        .send(TvEvent::Connected {
-            name: cfg.name.clone().unwrap_or_else(|| "Android TV".into()),
-        })
-        .await
-        .ok();
+    let name = if device.name.is_empty() {
+        "Android TV".to_string()
+    } else {
+        device.name.clone()
+    };
+    ev_tx.send(TvEvent::Connected { name }).await.ok();
 
     // --- §4.3.3-5 steady-state serve loop. Single writer (`wr`); inbound arrives
     //     only via `inbound_rx`. No raw framing read future in this select. ---

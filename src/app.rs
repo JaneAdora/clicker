@@ -1,5 +1,5 @@
 // src/app.rs
-use crate::config::Config;
+use crate::config::{Config, DeviceEntry};
 use crate::types::{InputMode, LinkState, TvCmd, TvEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
@@ -20,11 +20,10 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config, cmd_tx: Sender<TvCmd>) -> Self {
-        let tv_name = config
-            .name
-            .clone()
-            .unwrap_or_else(|| "(no TV)".to_string());
-        let volume = config.last_volume.unwrap_or(0);
+        let (tv_name, volume) = match config.active_device() {
+            Some(d) => (d.name.clone(), d.last_volume.unwrap_or(0)),
+            None => ("(no TV)".to_string(), 0),
+        };
         App {
             config,
             tv_name,
@@ -134,37 +133,25 @@ pub async fn run<B: Backend>(
     cfg: Config,
     id: ClientIdentity,
 ) -> anyhow::Result<()> {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<TvCmd>(CMD_CHANNEL);
+    // `App` holds a command sender, but the REAL connection channel is minted by
+    // `spawn_connection` so that switching TVs can swap in a fresh channel (the
+    // old design moved the single receiver once and could never replace it). The
+    // placeholder receiver is dropped immediately; nothing reads it.
+    let (cmd_tx0, _placeholder_rx) = mpsc::channel::<TvCmd>(CMD_CHANNEL);
     let (ev_tx, mut ev_rx) = mpsc::channel(EVENT_CHANNEL);
 
-    let mut app = App::new(cfg, cmd_tx.clone());
+    let mut app = App::new(cfg, cmd_tx0);
 
-    // The connection task consumes `cmd_rx` exactly once — either now (host known)
-    // or after the first-run host prompt resolves. Hold it in an Option and
-    // `.take()` it at the single spawn site so the borrow checker is satisfied and
-    // we can never accidentally reuse a moved receiver. The owned identity stays
-    // borrowed via `id_clone(&id)` at each spawn site, so it is never moved out.
-    let mut cmd_rx = Some(cmd_rx);
-
-    // First-run host prompt: no host yet → capture the TV IP in a DISTINCT
-    // HostEntry modal (not the PIN modal) before connecting.
-    if app.config.host.is_none() {
+    let mut conn: Option<tokio::task::JoinHandle<()>> = None;
+    if app.config.active_device().is_some() {
+        conn = Some(spawn_connection(&mut app, &id, &ev_tx)?);
+    } else {
+        // First-run: no device yet → capture the TV IP in a DISTINCT HostEntry
+        // modal (not the PIN modal) before connecting.
         app.mode = InputMode::HostEntry {
             entered: String::new(),
         };
         app.toast("Enter the TV's IP address");
-    }
-
-    // Spawn the connection task only once we have a host. If we still need the
-    // host, the spawn is deferred until the prompt is answered (below).
-    let mut conn: Option<tokio::task::JoinHandle<()>> = None;
-    if app.config.host.is_some() {
-        conn = Some(tokio::spawn(remote::run_connection(
-            app.config.clone(),
-            id_clone(&id)?,
-            cmd_rx.take().unwrap(),
-            ev_tx.clone(),
-        )));
     }
 
     let mut events = crossterm::event::EventStream::new();
@@ -181,17 +168,22 @@ pub async fn run<B: Backend>(
                         match handle_key(&mut app, key) {
                             KeyOutcome::Quit => break,
                             KeyOutcome::HostEntered(host) => {
-                                // Persist and spawn the connection task (first run only).
-                                app.config.host = Some(host);
+                                // Register a device for this IP (name is provisional —
+                                // the real name arrives via Connected) and connect.
+                                let dev_id = app.config.unique_id(&config::slugify(&host));
+                                app.config.upsert_device(DeviceEntry {
+                                    id: dev_id,
+                                    name: host.clone(),
+                                    host: host.clone(),
+                                    paired: false,
+                                    last_volume: None,
+                                });
+                                app.tv_name = host;
                                 save_or_toast(&mut app);
-                                if let Some(rx) = cmd_rx.take() {
-                                    conn = Some(tokio::spawn(remote::run_connection(
-                                        app.config.clone(),
-                                        id_clone(&id)?,
-                                        rx,
-                                        ev_tx.clone(),
-                                    )));
+                                if let Some(h) = conn.take() {
+                                    h.abort();
                                 }
+                                conn = Some(spawn_connection(&mut app, &id, &ev_tx)?);
                                 dirty = true;
                             }
                             KeyOutcome::Redraw => dirty = true,
@@ -207,25 +199,51 @@ pub async fn run<B: Backend>(
                 // Persist the fields the config claims to remember. `name` and
                 // `last_volume` are otherwise never written, so the config would
                 // never self-heal. A simple save per change is fine at this volume.
+                // App is the SOLE config writer. Persist onto the ACTIVE device
+                // entry (the connection task no longer saves, so it can't clobber
+                // the registry/shortcuts from a stale clone).
                 match &ev {
-                    // Persist pairing success FIRST and onto the UI's own config, so
-                    // the later name/volume saves carry paired=true and never clobber
-                    // it back to false (the bug Codex flagged).
                     TvEvent::PairingOk => {
-                        if !app.config.paired {
-                            app.config.paired = true;
+                        let changed = app
+                            .config
+                            .active_device_mut()
+                            .map(|d| !std::mem::replace(&mut d.paired, true))
+                            .unwrap_or(false);
+                        if changed {
                             save_or_toast(&mut app);
                         }
                     }
                     TvEvent::Connected { name } => {
-                        if app.config.name.as_deref() != Some(name.as_str()) {
-                            app.config.name = Some(name.clone());
+                        let changed = app
+                            .config
+                            .active_device_mut()
+                            .map(|d| {
+                                if d.name != *name {
+                                    d.name = name.clone();
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if changed {
                             save_or_toast(&mut app);
                         }
                     }
                     TvEvent::VolumeChanged { level, .. } => {
-                        if app.config.last_volume != Some(*level) {
-                            app.config.last_volume = Some(*level);
+                        let changed = app
+                            .config
+                            .active_device_mut()
+                            .map(|d| {
+                                if d.last_volume != Some(*level) {
+                                    d.last_volume = Some(*level);
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if changed {
                             save_or_toast(&mut app);
                         }
                     }
@@ -255,6 +273,26 @@ pub async fn run<B: Backend>(
 /// on the DER types. Always succeeds here because cert/key were just written.
 fn id_clone(_id: &ClientIdentity) -> anyhow::Result<ClientIdentity> {
     crate::cert::load_or_generate(&config::dir())
+}
+
+/// Mint a FRESH command channel, repoint `app.cmd_tx` at it, and spawn the
+/// connection task reading the other end. A new channel per call is what lets
+/// device switching abort the old task and start a clean one (the old design
+/// moved the single receiver exactly once and could never hand a new task a
+/// receiver). Reads host/pairing from `app.config.active_device()`.
+fn spawn_connection(
+    app: &mut App,
+    id: &ClientIdentity,
+    ev_tx: &mpsc::Sender<TvEvent>,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<TvCmd>(CMD_CHANNEL);
+    app.cmd_tx = cmd_tx;
+    Ok(tokio::spawn(remote::run_connection(
+        app.config.clone(),
+        id_clone(id)?,
+        cmd_rx,
+        ev_tx.clone(),
+    )))
 }
 
 enum KeyOutcome {
