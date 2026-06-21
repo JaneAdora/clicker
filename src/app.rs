@@ -331,8 +331,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 KeyOutcome::Redraw
             }
             Some(Action::EnterTextMode) => {
-                // IME text entry lands in v1.1; say so rather than silently ignoring.
-                app.toast("text entry (k) — coming in v1.1");
+                // Real live-IME typing mode lands in P3; placeholder until then.
+                app.toast("typing mode — coming next");
+                KeyOutcome::Redraw
+            }
+            Some(Action::Launch(d)) => {
+                match app.config.shortcut(d) {
+                    Some(s) => {
+                        if app.cmd_tx.try_send(TvCmd::LaunchApp(s.target)).is_err() {
+                            app.toast("link busy — key dropped");
+                        }
+                    }
+                    None => app.toast(format!("no app on [{d}]")),
+                }
                 KeyOutcome::Redraw
             }
             Some(Action::Cmd(cmd)) => {

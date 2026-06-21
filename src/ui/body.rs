@@ -42,7 +42,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Length(1), // gap
             Constraint::Length(4), // Back/Input, Voice/Type, Volume/Channel, Mute
             Constraint::Length(1), // gap
-            Constraint::Length(3), // apps
+            Constraint::Length(5), // apps (up to 10, two columns)
             Constraint::Length(1), // gap
             Constraint::Length(6), // media
             Constraint::Length(1), // gap
@@ -79,15 +79,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         rows[4],
     );
 
-    // app shortcuts — not limited to the physical remote's hotkeys; any installed
-    // app can get a launch shortcut via the protocol's app-link request.
+    // app shortcuts — rendered from config (digits 1-0); any installed app can get
+    // a launch shortcut via the protocol's app-link request.
     f.render_widget(
-        Paragraph::new(vec![
-            pair(app_line("\u{24c3}", "Netflix", "1"), app_line("\u{24ce}", "YouTube", "2"), 16, 30),
-            pair(app_line("\u{24b9}", "Disney+", "3"), app_line("\u{24c2}", "Max", "4"), 16, 30),
-            pair(app_line("\u{24c9}", "TCL apps", "5"), Line::raw(""), 16, 30),
-        ])
-        .alignment(Alignment::Center),
+        Paragraph::new(app_rows(app)).alignment(Alignment::Center),
         rows[6],
     );
 
@@ -158,6 +153,42 @@ fn app_line(logo: &str, name: &str, key: &str) -> Line<'static> {
     ];
     s.extend(cap(key));
     Line::from(s)
+}
+
+/// A little logo for an app: the circled form of its label's first letter
+/// (Ⓝ for Netflix), or `▸` for non-alphabetic labels. Works for any app.
+fn logo_for(label: &str) -> String {
+    match label.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => {
+            let up = c.to_ascii_uppercase() as u32;
+            char::from_u32(0x24B6 + (up - 'A' as u32))
+                .map(|g| g.to_string())
+                .unwrap_or_else(|| "\u{25b8}".into())
+        }
+        _ => "\u{25b8}".into(),
+    }
+}
+
+/// Rows of configured app shortcuts (digits 1-0), two per line. Only present slots
+/// render (open digits are skipped). Source of truth: `app.config.shortcut`.
+fn app_rows(app: &App) -> Vec<Line<'static>> {
+    const ORDER: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+    let present: Vec<(char, String)> = ORDER
+        .iter()
+        .filter_map(|&d| app.config.shortcut(d).map(|s| (d, s.label)))
+        .collect();
+    present
+        .chunks(2)
+        .map(|chunk| {
+            let (d0, l0) = &chunk[0];
+            let left = app_line(&logo_for(l0), l0, &d0.to_string());
+            let right = match chunk.get(1) {
+                Some((d1, l1)) => app_line(&logo_for(l1), l1, &d1.to_string()),
+                None => Line::raw(""),
+            };
+            pair(left, right, 16, 30)
+        })
+        .collect()
 }
 
 /// Media transport (bonus). Glyphs: ▶ play, ■ stop, plus ASCII transport.

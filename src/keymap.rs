@@ -5,26 +5,18 @@
 use crate::types::{RemoteKey, TvCmd};
 use crossterm::event::{KeyCode, KeyEvent};
 
-/// App-launch deep links (sent via RemoteAppLinkLaunchRequest). Netflix/YouTube are
-/// reliable; Disney+/Max/TCL are best-known URLs and may need tuning per TV.
-const NETFLIX: &str = "https://www.netflix.com/title";
-const YOUTUBE: &str = "https://www.youtube.com";
-const DISNEY: &str = "https://www.disneyplus.com";
-const MAX: &str = "https://play.max.com";
-const TCL: &str = "https://www.tcl.com"; // placeholder — the T button is TCL-proprietary
-
 /// What a keypress resolves to.
 pub enum Action {
     Cmd(TvCmd),
     Quit,
-    EnterTextMode, // `k` — IME text entry (lands in v1.1)
+    Launch(char),  // digit 0-9 -> app shortcut, resolved against config in app.rs
+    EnterTextMode, // `k` — live IME text entry
     EnterProbe,    // `/` — raw keycode probe (debug)
 }
 
 pub fn map_normal(key: KeyEvent) -> Option<Action> {
     use KeyCode::*;
     let k = |rk: RemoteKey| Some(Action::Cmd(TvCmd::Key(rk)));
-    let app = |url: &str| Some(Action::Cmd(TvCmd::LaunchApp(url.to_string())));
 
     match key.code {
         // D-pad + select (Enter is the centre of the D-pad)
@@ -55,12 +47,8 @@ pub fn map_normal(key: KeyEvent) -> Option<Action> {
         PageUp => k(RemoteKey::ChannelUp),
         PageDown => k(RemoteKey::ChannelDown),
 
-        // App shortcuts (number row)
-        Char('1') => app(NETFLIX),
-        Char('2') => app(YOUTUBE),
-        Char('3') => app(DISNEY),
-        Char('4') => app(MAX),
-        Char('5') => app(TCL),
+        // App shortcuts (digits 1-0; resolved against config in app.rs)
+        Char(c) if c.is_ascii_digit() => Some(Action::Launch(c)),
 
         // Media transport (bonus — not on the physical RC802V)
         Char(' ') => k(RemoteKey::PlayPause),
@@ -136,11 +124,15 @@ mod tests {
     }
 
     #[test]
-    fn digit_one_launches_netflix() {
-        match map_normal(ev(KeyCode::Char('1'))) {
-            Some(Action::Cmd(TvCmd::LaunchApp(url))) => assert!(url.contains("netflix")),
-            _ => panic!("1 should launch Netflix"),
-        }
+    fn digits_map_to_launch() {
+        assert!(matches!(
+            map_normal(ev(KeyCode::Char('1'))),
+            Some(Action::Launch('1'))
+        ));
+        assert!(matches!(
+            map_normal(ev(KeyCode::Char('0'))),
+            Some(Action::Launch('0'))
+        ));
     }
 
     #[test]
