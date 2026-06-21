@@ -137,6 +137,52 @@ pub fn render_text_input(f: &mut Frame, area: Rect, buffer: &str, field_active: 
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Device picker: saved TVs (●), discovered TVs (○), and a manual-entry row.
+/// The selected row is highlighted with a `›` caret.
+pub fn render_picker(f: &mut Frame, area: Rect, rows: &[crate::types::PickerRow], selected: usize) {
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " devices ",
+            theme::pane_header_focused(),
+        )))
+        .borders(Borders::ALL)
+        .border_style(theme::pane_header());
+    f.render_widget(Clear, area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "\u{2191}/\u{2193} select  ·  Enter connect  ·  Esc close",
+            theme::dim(),
+        )),
+        Line::from(Span::raw("")),
+    ];
+    for (i, row) in rows.iter().enumerate() {
+        let caret = if i == selected { "\u{203a}" } else { " " };
+        let text = if row.manual {
+            format!(" {caret} \u{ff0b} {}", row.name)
+        } else {
+            let dot = if row.saved { "\u{25cf}" } else { "\u{25cb}" };
+            format!(" {caret} {dot} {}   {}", row.name, row.host)
+        };
+        let style = if i == selected {
+            theme::pane_header_focused()
+        } else {
+            theme::historical()
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+    if rows.len() <= 1 {
+        lines.push(Line::from(Span::raw("")));
+        lines.push(Line::from(Span::styled(
+            "scanning for TVs\u{2026}",
+            theme::dim(),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 /// First-run host (TV IP) entry. NOT masked — an IP address is not a secret.
 /// Distinct title/prompt from the PIN modal so the two are never confused.
 pub fn render_host(f: &mut Frame, area: Rect, entered: &str) {

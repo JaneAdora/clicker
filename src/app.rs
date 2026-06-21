@@ -1,6 +1,6 @@
 // src/app.rs
 use crate::config::{Config, DeviceEntry};
-use crate::types::{InputMode, LinkState, RemoteKey, TvCmd, TvEvent};
+use crate::types::{InputMode, LinkState, PickerRow, RemoteKey, TvCmd, TvEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 
@@ -157,6 +157,25 @@ impl App {
                     *field_active = active;
                 }
             }
+            TvEvent::DiscoveredDevice { name, host } => {
+                // Append to the open picker, before the trailing manual-entry row,
+                // unless this host is already listed.
+                if let InputMode::DevicePicker { rows, .. } = &mut self.mode {
+                    if !rows.iter().any(|r| r.host == host) {
+                        let idx = rows.len().saturating_sub(1);
+                        rows.insert(
+                            idx,
+                            PickerRow {
+                                id: None,
+                                name,
+                                host,
+                                saved: false,
+                                manual: false,
+                            },
+                        );
+                    }
+                }
+            }
             TvEvent::Error(msg) => {
                 self.link = LinkState::Down;
                 self.toast(msg);
@@ -180,6 +199,25 @@ impl App {
     /// Current toast text, if any (for the header/footer render).
     pub fn transient_str(&self) -> Option<&str> {
         self.transient.as_ref().map(|(s, _)| s.as_str())
+    }
+
+    /// Move the device-picker selection by `delta`, clamped to the row range.
+    pub fn picker_move(&mut self, delta: i32) {
+        if let InputMode::DevicePicker { rows, selected } = &mut self.mode {
+            if rows.is_empty() {
+                return;
+            }
+            let max = rows.len() as i32 - 1;
+            *selected = (*selected as i32 + delta).clamp(0, max) as usize;
+        }
+    }
+
+    /// Current device-picker selection index (0 if not in the picker).
+    pub fn picker_selected(&self) -> usize {
+        match &self.mode {
+            InputMode::DevicePicker { selected, .. } => *selected,
+            _ => 0,
+        }
     }
 }
 
@@ -266,6 +304,19 @@ pub async fn run<B: Backend>(
                                 });
                                 app.tv_name = host;
                                 save_or_toast(&mut app);
+                                if let Some(h) = conn.take() {
+                                    h.abort();
+                                }
+                                conn = Some(spawn_connection(&mut app, &id, &ev_tx)?);
+                                dirty = true;
+                            }
+                            KeyOutcome::OpenPicker => {
+                                // Kick off a best-effort mDNS sweep; results stream
+                                // back as DiscoveredDevice events into the picker.
+                                tokio::spawn(crate::discovery::browse(ev_tx.clone()));
+                                dirty = true;
+                            }
+                            KeyOutcome::Reconnect => {
                                 if let Some(h) = conn.take() {
                                     h.abort();
                                 }
@@ -400,6 +451,8 @@ enum KeyOutcome {
     Redraw,
     Ignored,
     HostEntered(String),
+    OpenPicker, // run() spawns mDNS discovery
+    Reconnect,  // active device changed → abort + respawn the connection task
 }
 
 /// Dispatch a keypress by the current `InputMode`. Synchronous: only `try_send`
@@ -427,6 +480,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         // First-run host capture and PIN capture share the same keystroke handling.
         InputMode::HostEntry { .. } | InputMode::PinEntry { .. } => handle_pin_key(app, key),
         InputMode::KeyProbe { .. } => handle_probe_key(app, key),
+        InputMode::DevicePicker { .. } => handle_picker_key(app, key),
         // TextInput is dispatched earlier (before global-q); unreachable here.
         InputMode::TextInput { .. } => KeyOutcome::Ignored,
         InputMode::Normal => match keymap::map_normal(key) {
@@ -444,6 +498,31 @@ fn handle_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                     field_active: app.field_active,
                 };
                 KeyOutcome::Redraw
+            }
+            Some(Action::EnterPicker) => {
+                // Saved devices first, then a trailing manual-entry action row.
+                // Discovered TVs stream in via DiscoveredDevice while it's open.
+                let mut rows: Vec<PickerRow> = app
+                    .config
+                    .devices
+                    .iter()
+                    .map(|d| PickerRow {
+                        id: Some(d.id.clone()),
+                        name: d.name.clone(),
+                        host: d.host.clone(),
+                        saved: true,
+                        manual: false,
+                    })
+                    .collect();
+                rows.push(PickerRow {
+                    id: None,
+                    name: "Enter IP manually".into(),
+                    host: String::new(),
+                    saved: false,
+                    manual: true,
+                });
+                app.mode = InputMode::DevicePicker { rows, selected: 0 };
+                KeyOutcome::OpenPicker
             }
             Some(Action::Launch(d)) => {
                 match app.config.shortcut(d) {
@@ -591,6 +670,65 @@ fn handle_text_input_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 field_active,
             };
             KeyOutcome::Redraw
+        }
+        _ => KeyOutcome::Ignored,
+    }
+}
+
+/// Device picker: arrows move the selection, Enter connects (registering a fresh
+/// discovery first, or routing to manual IP entry), Esc closes. Returns Reconnect
+/// when the active device changed so run() restarts the connection task.
+fn handle_picker_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = InputMode::Normal;
+            KeyOutcome::Redraw
+        }
+        KeyCode::Up => {
+            app.picker_move(-1);
+            KeyOutcome::Redraw
+        }
+        KeyCode::Down => {
+            app.picker_move(1);
+            KeyOutcome::Redraw
+        }
+        KeyCode::Enter => {
+            let row = match &app.mode {
+                InputMode::DevicePicker { rows, selected } => rows.get(*selected).cloned(),
+                _ => None,
+            };
+            let Some(row) = row else {
+                return KeyOutcome::Ignored;
+            };
+            if row.manual {
+                app.mode = InputMode::HostEntry {
+                    entered: String::new(),
+                };
+                app.toast("Enter the TV's IP address");
+                return KeyOutcome::Redraw;
+            }
+            match row.id {
+                // saved device → make it active
+                Some(id) => app.config.last_device = Some(id),
+                // discovered → register with a collision-safe id
+                None => {
+                    let dev_id = app.config.unique_id(&config::slugify(&row.name));
+                    app.config.upsert_device(DeviceEntry {
+                        id: dev_id,
+                        name: row.name.clone(),
+                        host: row.host.clone(),
+                        paired: false,
+                        last_volume: None,
+                    });
+                }
+            }
+            let name = app.config.active_device().map(|d| d.name.clone());
+            if let Some(n) = name {
+                app.tv_name = n;
+            }
+            app.mode = InputMode::Normal;
+            save_or_toast(app);
+            KeyOutcome::Reconnect
         }
         _ => KeyOutcome::Ignored,
     }
@@ -821,5 +959,57 @@ mod tests {
         let mut app = test_app();
         app.apply_tv_event(TvEvent::TextFieldActive(true));
         assert!(app.field_active);
+    }
+
+    fn picker_row(name: &str) -> PickerRow {
+        PickerRow {
+            id: Some(name.into()),
+            name: name.into(),
+            host: "1.2.3.4".into(),
+            saved: true,
+            manual: false,
+        }
+    }
+
+    #[test]
+    fn picker_nav_clamps() {
+        let mut app = test_app();
+        app.mode = InputMode::DevicePicker {
+            rows: vec![picker_row("a"), picker_row("b")],
+            selected: 0,
+        };
+        app.picker_move(1);
+        assert_eq!(app.picker_selected(), 1);
+        app.picker_move(1);
+        assert_eq!(app.picker_selected(), 1); // clamp at end
+        app.picker_move(-5);
+        assert_eq!(app.picker_selected(), 0); // clamp at start
+    }
+
+    #[test]
+    fn discovered_device_appends_to_open_picker() {
+        let mut app = test_app();
+        app.mode = InputMode::DevicePicker {
+            rows: vec![PickerRow {
+                id: None,
+                name: "Enter IP manually".into(),
+                host: String::new(),
+                saved: false,
+                manual: true,
+            }],
+            selected: 0,
+        };
+        app.apply_tv_event(TvEvent::DiscoveredDevice {
+            name: "Bedroom".into(),
+            host: "192.168.0.42".into(),
+        });
+        match &app.mode {
+            InputMode::DevicePicker { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0].name, "Bedroom"); // inserted before manual row
+                assert!(rows[1].manual);
+            }
+            _ => panic!("not in picker"),
+        }
     }
 }

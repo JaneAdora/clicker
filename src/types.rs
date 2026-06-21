@@ -60,6 +60,8 @@ pub enum TvEvent {
     PairingFailed(String),
     /// The TV reports a text field is focused (IME) and ready for input.
     TextFieldActive(bool),
+    /// An Android TV found on the LAN by mDNS discovery.
+    DiscoveredDevice { name: String, host: String },
     Error(String),
 }
 
@@ -80,6 +82,22 @@ pub enum InputMode {
     /// Live text entry: `buffer` mirrors to the TV's focused field via IME;
     /// `field_active` tracks whether the TV currently has a field focused.
     TextInput { buffer: String, field_active: bool },
+    /// Device picker: choose a saved or discovered TV (or enter an IP manually).
+    DevicePicker { rows: Vec<PickerRow>, selected: usize },
+}
+
+/// One row in the device picker: a saved/discovered TV, or the manual-entry action.
+#[derive(Clone, Debug)]
+pub struct PickerRow {
+    /// `Some` for a saved device (its registry id); `None` for a fresh discovery.
+    pub id: Option<String>,
+    pub name: String,
+    /// TV host; empty for the manual-entry row.
+    pub host: String,
+    /// True if this device is already in the saved registry.
+    pub saved: bool,
+    /// True for the trailing "＋ Enter IP manually" action row.
+    pub manual: bool,
 }
 
 #[cfg(test)]

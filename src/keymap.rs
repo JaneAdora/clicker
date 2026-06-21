@@ -11,6 +11,7 @@ pub enum Action {
     Quit,
     Launch(char),  // digit 0-9 -> app shortcut, resolved against config in app.rs
     EnterTextMode, // `k` — live IME text entry
+    EnterPicker,   // `d` — device picker / mDNS discovery
     EnterProbe,    // `/` — raw keycode probe (debug)
 }
 
@@ -37,6 +38,7 @@ pub fn map_normal(key: KeyEvent) -> Option<Action> {
         Char('i') => k(RemoteKey::Input),
         Char('v') => k(RemoteKey::Assist),
         Char('k') => Some(Action::EnterTextMode),
+        Char('d') => Some(Action::EnterPicker),
 
         // Volume (up = `+` or unshifted `=`; down = `-`) + mute
         Char('+') | Char('=') => k(RemoteKey::VolUp),

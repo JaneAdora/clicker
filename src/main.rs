@@ -1,6 +1,7 @@
 mod app;
 mod cert;
 mod config;
+mod discovery;
 mod framing;
 mod keymap;
 mod pairing;

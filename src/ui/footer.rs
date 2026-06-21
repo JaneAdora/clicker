@@ -10,6 +10,8 @@ pub fn render(f: &mut Frame, area: Rect, transient: Option<&str>) {
     let mut lines = vec![Line::from(vec![
         Span::styled("[q]", theme::pane_header_focused()),
         Span::styled(" quit   ", theme::dim()),
+        Span::styled("[d]", theme::pane_header_focused()),
+        Span::styled(" devices   ", theme::dim()),
         Span::styled("[/]", theme::pane_header_focused()),
         Span::styled(" keycode probe", theme::dim()),
     ])];

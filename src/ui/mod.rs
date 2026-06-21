@@ -49,5 +49,9 @@ pub fn render(f: &mut Frame, app: &App) {
             let area = modal::centered_rect(f.area(), 60, 36);
             modal::render_text_input(f, area, buffer, *field_active);
         }
+        InputMode::DevicePicker { rows, selected } => {
+            let area = modal::centered_rect(f.area(), 70, 60);
+            modal::render_picker(f, area, rows, *selected);
+        }
     }
 }

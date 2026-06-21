@@ -33,6 +33,8 @@ futures = "0.3"
 num-bigint-dig = "0.8"
 rand = "0.8"
 hex = "0.4"
+# Pure-Rust mDNS (no system deps) for Android TV discovery (_androidtvremote2._tcp).
+mdns-sd = "0.11"
 
 [build-dependencies]
 prost-build = "0.13"
