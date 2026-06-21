@@ -211,14 +211,6 @@ impl App {
             *selected = (*selected as i32 + delta).clamp(0, max) as usize;
         }
     }
-
-    /// Current device-picker selection index (0 if not in the picker).
-    pub fn picker_selected(&self) -> usize {
-        match &self.mode {
-            InputMode::DevicePicker { selected, .. } => *selected,
-            _ => 0,
-        }
-    }
 }
 
 // ===========================================================================
@@ -438,6 +430,8 @@ fn spawn_connection(
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<TvCmd>(CMD_CHANNEL);
     app.cmd_tx = cmd_tx;
+    // Show the ◐ connecting glyph until the task reports Connected (or PairingRequired).
+    app.link = LinkState::Connecting;
     Ok(tokio::spawn(remote::run_connection(
         app.config.clone(),
         id_clone(id)?,
@@ -978,12 +972,16 @@ mod tests {
             rows: vec![picker_row("a"), picker_row("b")],
             selected: 0,
         };
+        let sel = |app: &App| match &app.mode {
+            InputMode::DevicePicker { selected, .. } => *selected,
+            _ => panic!("not in picker"),
+        };
         app.picker_move(1);
-        assert_eq!(app.picker_selected(), 1);
+        assert_eq!(sel(&app), 1);
         app.picker_move(1);
-        assert_eq!(app.picker_selected(), 1); // clamp at end
+        assert_eq!(sel(&app), 1); // clamp at end
         app.picker_move(-5);
-        assert_eq!(app.picker_selected(), 0); // clamp at start
+        assert_eq!(sel(&app), 0); // clamp at start
     }
 
     #[test]

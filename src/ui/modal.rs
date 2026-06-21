@@ -167,7 +167,7 @@ pub fn render_picker(f: &mut Frame, area: Rect, rows: &[crate::types::PickerRow]
             format!(" {caret} {dot} {}   {}", row.name, row.host)
         };
         let style = if i == selected {
-            theme::pane_header_focused()
+            theme::active_row()
         } else {
             theme::historical()
         };

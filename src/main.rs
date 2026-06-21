@@ -1,3 +1,7 @@
+// prost message builders set one field on a defaulted struct; that's the idiomatic
+// shape for these big generated types, so allow clippy's field-reassign lint.
+#![allow(clippy::field_reassign_with_default)]
+
 mod app;
 mod cert;
 mod config;
@@ -25,17 +29,20 @@ USAGE:
   clicker --version  Print version.
 
 CONFIG:
-  ~/.config/clicker/config.toml   TV host, name, pairing state, last volume.
-  First run with no host prompts for the TV IP, then walks pairing (on-screen PIN).
+  ~/.config/clicker/config.toml   device registry (TVs), shortcuts, last device.
+  First run opens the device picker (mDNS discovery) or lets you enter the TV IP,
+  then walks pairing (on-screen PIN).
 
-KEYS: arrows = D-pad, Enter = select, +/- = volume, m = mute, ? = help, q = quit.
-Press ? inside clicker for the full keymap.
+KEYS: arrows/swipe = D-pad, Enter = select, +/- = volume, m = mute, d = devices,
+k = type on TV, 1-0 = app shortcuts, / = keycode probe, q = quit.
+All keys are shown on screen inside clicker.
 ";
 
 fn main() -> Result<()> {
     // ---- arg parsing (roam shape: --help / --version, reject unknown --flags) ----
+    // clicker takes no positional args, so inspect only the first (if any).
     let args: Vec<String> = std::env::args().skip(1).collect();
-    for a in &args {
+    if let Some(a) = args.first() {
         match a.as_str() {
             "--help" | "-h" => {
                 print!("{HELP}");

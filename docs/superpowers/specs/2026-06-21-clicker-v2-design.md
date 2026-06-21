@@ -1,7 +1,7 @@
 # clicker v2 — design spec
 
 - **Date:** 2026-06-21
-- **Status:** Approved (brainstorm) — pending implementation plan
+- **Status:** Code-complete (P1–P5 implemented) — pending on-device validation
 - **Supersedes/extends:** `2026-06-04-clicker-design.md` (v1 core protocol + TUI)
 
 ## Context & motivation

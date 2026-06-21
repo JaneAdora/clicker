@@ -3,13 +3,14 @@
 A terminal remote for Android TV / Google TV, written in Rust. It speaks the
 **Android TV Remote protocol v2** directly over your LAN — the same TLS-on-TCP
 mechanism the official phone remote apps use — so there's **no ADB, no developer
-mode, and no companion app**. Pair once with the on-screen PIN, then drive the TV
-from a terminal.
+mode, and no companion app**. Discover your TVs, pair once with the on-screen PIN,
+then drive everything from a terminal.
 
 As far as I can tell this is the first from-scratch Rust implementation of the v2
 pairing + command protocol (TLS client cert, protobuf messages, the SHA-256
-pairing-secret handshake). If you've been trying to talk to an Android TV from
-Rust, the protocol code in [`src/`](src/) is the interesting part.
+pairing-secret handshake, mDNS discovery, and live IME text entry). If you've been
+trying to talk to an Android TV from Rust, the protocol code in [`src/`](src/) is
+the interesting part.
 
 ```
            clicker Living Room  ●
@@ -31,7 +32,8 @@ Rust, the protocol code in [`src/`](src/) is the interesting part.
 
        Ⓝ Netflix [1]   Ⓨ YouTube [2]
        Ⓓ Disney+ [3]   Ⓜ Max [4]
-       Ⓣ TCL apps [5]
+       Ⓐ Amazon [5]    Ⓗ Hulu [6]
+       Ⓢ Spotify [7]
 
             ▶ Play/Pause [space]
                  ■ Stop [x]
@@ -41,7 +43,7 @@ Rust, the protocol code in [`src/`](src/) is the interesting part.
 
             █████░░░░░░░░░░░   32
 
-        [q] quit   [/] keycode probe
+ [q] quit   [d] devices   [/] keycode probe
 ```
 
 The on-screen layout mirrors a physical TCL RC802V remote: a vertical, two-column
@@ -59,13 +61,16 @@ The Android TV Remote v2 protocol runs over two TLS ports on the TV:
   and checking the first byte against `code[0]`. After that, the TV trusts the
   client cert permanently.
 - **`:6466` — remote control.** A long-lived TLS connection carrying length-delimited
-  protobuf messages: key injections, app-launch links, volume state, and a
-  ping/pong keepalive.
+  protobuf messages: key injections, app-launch links, IME text edits, volume state,
+  and a ping/pong keepalive.
+- **Discovery.** TVs advertise `_androidtvremote2._tcp` over mDNS; clicker browses
+  for them so you never have to type an IP.
 
-clicker implements both. Notable build choices: the [`ring`](https://github.com/briansmith/ring)
-rustls provider (no `cmake` needed) and [`protox`](https://github.com/andrewhickman/protox)
-for pure-Rust protobuf compilation (no system `protoc` needed) — so `cargo build`
-just works with no external toolchain.
+clicker implements all of it. Notable build choices: the
+[`ring`](https://github.com/briansmith/ring) rustls provider (no `cmake` needed),
+[`protox`](https://github.com/andrewhickman/protox) for pure-Rust protobuf
+compilation (no system `protoc` needed), and [`mdns-sd`](https://crates.io/crates/mdns-sd)
+for pure-Rust discovery — so `cargo build` just works with no external toolchain.
 
 ## Build & install
 
@@ -89,13 +94,13 @@ Rust with `pkg install rust` (not `rustup`, which can't run on Android).
 
 ## First run
 
-1. `clicker` with no existing config prompts for the **TV's IP address** (a startup
-   modal — type the IP, then `Enter`). You can find it under the TV's
-   *Settings → Network*.
+1. `clicker` with no saved TV opens the **device picker** and scans the LAN. Pick
+   your TV from the list (or choose **＋ Enter IP manually** if discovery is blocked
+   on your network — common on some Android/Wi-Fi setups).
 2. The TV displays a **6-character PIN**. clicker opens a PIN modal — type it and
    press `Enter`.
-3. On success the TV trusts clicker's certificate, `paired = true` is saved, and
-   subsequent runs connect straight to the remote.
+3. On success the TV trusts clicker's certificate, the device is saved, and
+   subsequent runs reconnect to it automatically.
 
 The link glyph in the header tracks state: `○` down → `◐` connecting/pairing → `●`
 connected.
@@ -106,23 +111,58 @@ Every binding is a single un-shifted key.
 
 | Key | Action | | Key | Action |
 |---|---|---|---|---|
-| `↑ ↓ ← →` | D-pad | | `1` | Netflix |
-| `Enter` | Select / OK | | `2` | YouTube |
-| `Esc` / `Backspace` | Back | | `3` | Disney+ |
-| `h` | Home | | `4` | Max |
-| `o` | Options / Menu | | `5` | TCL apps |
-| `p` | Power | | `Space` | Play / Pause |
-| `s` | Settings | | `x` | Stop |
-| `i` | Input / Source | | `,` / `.` | Rewind / Fast-fwd |
-| `v` | Voice / Assistant | | `;` / `'` | Previous / Next |
-| `+` / `-` | Volume up / down | | `q` | Quit |
-| `m` | Mute | | `/` | Keycode probe |
-| `PgUp` / `PgDn` | Channel up / down | | `k` | Text entry *(planned, v1.1)* |
+| `↑ ↓ ← →` / swipe | D-pad | | `1`–`0` | App shortcuts (configurable) |
+| `Enter` | Select / OK | | `Space` | Play / Pause |
+| `Esc` / `Backspace` | Back | | `x` | Stop |
+| `h` | Home | | `,` / `.` | Rewind / Fast-forward |
+| `o` | Options / Menu | | `;` / `'` | Previous / Next |
+| `p` | Power | | `d` | Devices / discovery |
+| `s` | Settings | | `k` | Type on the TV (live) |
+| `i` | Input / Source | | `/` | Keycode probe |
+| `v` | Voice / Assistant | | `q` | Quit |
+| `+` / `-` / `m` | Volume up / down / mute | | `Ctrl-C` | Quit (any mode) |
+| `PgUp` / `PgDn` | Channel up / down | | | |
 
-`q` and `Ctrl-C` quit from every mode. App shortcuts (`1`–`5`) send
-`RemoteAppLinkLaunchRequest` deep links; Netflix and YouTube are reliable, the
-others are best-known URLs and may need tuning per TV. [`src/keymap.rs`](src/keymap.rs)
-is the source of truth.
+`q` and `Ctrl-C` quit from every mode (in typing mode, only `Ctrl-C`, so a literal
+`q` is typed). [`src/keymap.rs`](src/keymap.rs) is the source of truth.
+
+## Multiple TVs & discovery
+
+Press `d` for the **device picker**. clicker scans the LAN over mDNS
+(`_androidtvremote2._tcp`) and lists nearby TVs by name — `●` already paired, `○`
+newly discovered — plus an **＋ Enter IP manually** row for networks where multicast
+is blocked. Select a TV to connect; pairing runs automatically for a new one. A
+single shared client certificate is paired with every TV, and clicker remembers
+them all, reconnecting to the last one on launch.
+
+## Typing / search mode
+
+Press `k` to type into the TV's focused field — a search box, a login. What you type
+mirrors **live** onto the TV via the remote IME; `Backspace` edits, `Enter` submits,
+`Esc` cancels. If no field is focused yet, the modal tells you to focus a search box
+on the TV first.
+
+## App shortcuts
+
+Digits `1`–`0` launch apps. Defaults are Netflix, YouTube, Disney+, Max, Amazon,
+Hulu, Spotify on `1`–`7` (`8`, `9`, `0` are open). Override or add any slot in
+`config.toml`:
+
+```toml
+[shortcuts]
+"8" = { label = "Plex",        kind = "package", target = "com.plexapp.android" }
+"9" = { label = "Crunchyroll", kind = "url",     target = "https://www.crunchyroll.com" }
+```
+
+`kind = "url"` sends a deep-link URL; `kind = "package"` sends an Android package id
+(launches on Play-Store devices). Both go out as `RemoteAppLinkLaunchRequest`.
+
+## Swipe
+
+On a touch terminal (e.g. Termux), **swipe** up/down/left/right over the remote to
+drive the D-pad — clicker turns touch drags into D-pad steps. Mouse-wheel scroll
+works too on the desktop. (Mouse capture means terminal text-selection needs Shift
+held, as with other full-screen TUIs.)
 
 ## Keycode probe
 
@@ -137,23 +177,37 @@ work where the generic input doesn't).
 
 Runtime state lives in `~/.config/clicker/`, **never** in the repo:
 
-- `config.toml` — TV host, name, paired flag, last volume
-- `cert.pem` / `key.pem` — the client certificate the TV trusts
+- `config.toml` — a device registry (each TV's host, name, paired flag, last
+  volume), your last-used TV, and any `[shortcuts]` overrides
+- `cert.pem` / `key.pem` — the shared client certificate the TVs trust
+
+```toml
+last_device = "living-room"
+
+[[device]]
+id = "living-room"
+name = "Living Room"
+host = "192.168.0.157"
+paired = true
+```
 
 Treat `cert.pem` / `key.pem` like a credential: anyone with that key pair can
-control your paired TV. They're generated locally on first run and are covered by
+control your paired TVs. They're generated locally on first run and are covered by
 `.gitignore` (along with `config.toml` and `*.pem` / `*.key`) so they can't be
-committed by accident. Nothing clicker writes at runtime ever lands in the repo.
+committed by accident. Nothing clicker writes at runtime ever lands in the repo. A
+v1 single-TV `config.toml` is migrated to the registry automatically on first run —
+no re-pairing.
 
 ## Status
 
-Tested against a TCL Android TV with the RC802V remote layout. The core remote —
-pairing, D-pad, volume/mute, transport, app launch, keepalive, auto-reconnect — is
-working. Text/IME entry (`k`) is stubbed for v1.1.
+The full remote works: discovery, multi-TV pairing and switching, D-pad,
+volume/mute, transport, configurable app launch, live typing, swipe, keepalive, and
+auto-reconnect. Validated against a TCL Android TV (RC802V layout). The IME typing
+path and mDNS discovery are protocol-correct but TV- and network-dependent, so
+they're best confirmed on your own setup.
 
 clicker started life as a member of a personal Rust TUI suite, so it borrows that
-suite's ratatui styling, but it's self-contained and has no suite dependency — it
-builds and runs on its own.
+suite's ratatui styling, but it's self-contained and builds and runs on its own.
 
 ## License
 

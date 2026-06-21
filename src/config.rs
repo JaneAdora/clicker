@@ -138,11 +138,6 @@ impl Config {
         self.devices.iter_mut().find(|d| d.id == id)
     }
 
-    /// Mutable view of a device by id.
-    pub fn device_by_id_mut(&mut self, id: &str) -> Option<&mut DeviceEntry> {
-        self.devices.iter_mut().find(|d| d.id == id)
-    }
-
     /// A registry id derived from `base` that does not collide with an existing
     /// device (suffix `-2`, `-3`, … on collision) — so two same-named TVs don't
     /// overwrite each other.
