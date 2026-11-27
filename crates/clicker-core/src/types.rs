@@ -1,5 +1,3 @@
-// /home/jane/projects/clicker/src/types.rs
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemoteKey {
     Up, Down, Left, Right, Select,
@@ -54,10 +52,21 @@ pub enum TvCmd {
 pub enum TvEvent {
     Connected { name: String },
     Disconnected,
+    /// SHA-256 fingerprint (lowercase hex) of the certificate the TV presented on
+    /// 6466. Emitted right after the TCP+TLS connect, before the handshake.
+    /// `host` is the address that connection used, so a receiver can drop an event
+    /// that arrives late from a connection to a TV it has since switched away from.
+    ServerIdentity { host: String, fingerprint: String },
     VolumeChanged { level: u8, max: u8, muted: bool },
     PairingRequired,
     PairingOk,
+    /// The code was refused or the TV did not answer it; the modal stays
+    /// open for the fresh code.
     PairingFailed(String),
+    /// After the code modal opened, the TV stopped taking pairing
+    /// connections (turned off, left the network). The modal stays open and
+    /// the connection keeps retrying; the code typed so far is still good.
+    PairingUnreachable(String),
     /// The TV reports a text field is focused (IME) and ready for input.
     TextFieldActive(bool),
     /// An Android TV found on the LAN by mDNS discovery.

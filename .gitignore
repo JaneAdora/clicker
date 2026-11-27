@@ -7,3 +7,15 @@
 *.key
 config.toml
 /.config/
+
+# Android app build output and local config
+android/.gradle/
+android/**/build/
+android/local.properties
+android/app/src/main/jniLibs/
+*.jks
+*.keystore
+.cxx/
+
+# Local agent scratch (plans in progress, review packages).
+.superpowers/

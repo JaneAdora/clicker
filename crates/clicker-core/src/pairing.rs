@@ -93,7 +93,14 @@ use crate::cert::ClientIdentity;
 use crate::framing::{read_msg, write_msg};
 use crate::proto::polo;
 
-const PAIRING_PORT: u16 = 6467;
+/// The TV's pairing port.
+pub const PAIRING_PORT: u16 = 6467;
+
+use crate::tls::HANDSHAKE_TIMEOUT;
+
+/// What a code check that got no answer says. It reaches the user as a
+/// pairing failure, so it says what to do.
+pub const FINISH_TIMED_OUT: &str = "The TV did not answer. Try the code again.";
 
 /// Owns the TLS stream to the pairing port plus everything needed to finish.
 pub struct Pairing {
@@ -134,9 +141,29 @@ fn parse_outer(bytes: &[u8]) -> anyhow::Result<polo::OuterMessage> {
 ///
 /// LIVE: requires a real TV; not unit-tested.
 pub async fn begin(host: &str, id: &ClientIdentity) -> anyhow::Result<Pairing> {
+    begin_at(host, PAIRING_PORT, id).await
+}
+
+/// [`begin`] on an explicit port, so tests can aim at a local one. Everything
+/// after the TLS connect shares one `HANDSHAKE_TIMEOUT`; a TV that accepts and
+/// then goes quiet reads as not reachable, like a refused connect.
+pub async fn begin_at(host: &str, port: u16, id: &ClientIdentity) -> anyhow::Result<Pairing> {
     // §4.2.1 TLS connect; capture server cert DER.
-    let (mut stream, server_cert) = crate::tls::connect(host, PAIRING_PORT, id).await?;
+    let (stream, server_cert) = crate::tls::connect(host, port, id).await?;
     let (server_n, server_e) = rsa_params_from_cert_der(&server_cert)?;
+    let (client_n, client_e) = (id.modulus.clone(), id.exponent.clone());
+    let walk = walk_to_code(stream, client_n, client_e, server_n, server_e);
+    crate::tls::with_deadline(HANDSHAKE_TIMEOUT, format!("TV not reachable at {host}:{port}"), walk).await
+}
+
+/// §4.2 steps 2-7 on a connected stream.
+async fn walk_to_code(
+    mut stream: TlsStream<TcpStream>,
+    client_n: Vec<u8>,
+    client_e: Vec<u8>,
+    server_n: Vec<u8>,
+    server_e: Vec<u8>,
+) -> anyhow::Result<Pairing> {
 
     // §4.2.2 -> PairingRequest
     let req = polo::OuterMessage {
@@ -195,7 +222,6 @@ pub async fn begin(host: &str, id: &ClientIdentity) -> anyhow::Result<Pairing> {
         bail!("expected ConfigurationAck, got {cfg_ack:?}");
     }
 
-    let (client_n, client_e) = (id.modulus.clone(), id.exponent.clone());
     Ok(Pairing {
         stream,
         client_n,
@@ -219,19 +245,23 @@ impl Pairing {
             pin,
         )?;
 
-        // §4.2.10 -> Secret
-        let secret_msg = polo::OuterMessage {
-            secret: Some(polo::Secret { secret }),
-            ..outer_skeleton()
-        };
-        write_msg(&mut self.stream, &encode_outer(&secret_msg)).await?;
+        let stream = &mut self.stream;
+        let exchange = async move {
+            // §4.2.10 -> Secret
+            let secret_msg = polo::OuterMessage {
+                secret: Some(polo::Secret { secret }),
+                ..outer_skeleton()
+            };
+            write_msg(stream, &encode_outer(&secret_msg)).await?;
 
-        // §4.2.11 <- SecretAck
-        let ack = parse_outer(&read_msg(&mut self.stream).await?)?;
-        if ack.secret_ack.is_none() {
-            bail!("expected SecretAck, got {ack:?}");
-        }
-        Ok(())
+            // §4.2.11 <- SecretAck
+            let ack = parse_outer(&read_msg(stream).await?)?;
+            if ack.secret_ack.is_none() {
+                bail!("expected SecretAck, got {ack:?}");
+            }
+            Ok(())
+        };
+        crate::tls::with_deadline(HANDSHAKE_TIMEOUT, FINISH_TIMED_OUT, exchange).await
     }
 }
 

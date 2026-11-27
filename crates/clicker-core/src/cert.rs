@@ -1,4 +1,3 @@
-// /home/jane/projects/clicker/src/cert.rs
 use std::path::Path;
 
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
@@ -13,15 +12,71 @@ pub struct ClientIdentity {
     pub exponent: Vec<u8>, // minimal big-endian, NO leading zero byte
 }
 
+/// Create `dir` (and parents). On Unix a directory this call creates gets mode
+/// 0o700; an existing directory is left as it is.
+fn create_private_dir(dir: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(dir)?;
+    Ok(())
+}
+
+/// Write the private key. On Unix the file is created with mode 0o600, so it is
+/// never readable by others, not even briefly.
+fn write_private_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        // `.mode()` only applies when the file is created; a stale file keeps its
+        // old (possibly loose) mode, so remove it first.
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+/// On Unix, tighten an existing key file that has any group/other bits to 0o600.
+fn tighten_key_permissions(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Load `cert.pem`/`key.pem` from `dir` if present; otherwise generate a fresh
 /// RSA-2048 self-signed CA cert, persist it, and return the identity.
 pub fn load_or_generate(dir: &Path) -> anyhow::Result<ClientIdentity> {
-    fs::create_dir_all(dir)?;
+    create_private_dir(dir)?;
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
 
     let (cert_pem, key_pkcs8_pem): (String, String) =
         if cert_path.exists() && key_path.exists() {
+            tighten_key_permissions(&key_path)?;
             (
                 fs::read_to_string(&cert_path)?,
                 fs::read_to_string(&key_path)?,
@@ -52,7 +107,7 @@ pub fn load_or_generate(dir: &Path) -> anyhow::Result<ClientIdentity> {
             let cert_pem = cert.pem();
 
             fs::write(&cert_path, &cert_pem)?;
-            fs::write(&key_path, &key_pkcs8_pem)?;
+            write_private_file(&key_path, &key_pkcs8_pem)?;
             (cert_pem, key_pkcs8_pem)
         };
 
@@ -113,5 +168,35 @@ mod tests {
             "second load regenerated the key instead of reusing the persisted one"
         );
         assert_eq!(first.exponent, second.exponent);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("cfg");
+        let first = load_or_generate(&dir).unwrap();
+        let key = dir.join("key.pem");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&key), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let second = load_or_generate(&dir).unwrap();
+        assert_eq!(mode(&key), 0o600);
+        assert_eq!(first.modulus, second.modulus);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regenerated_key_over_loose_stale_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let key = tmp.path().join("key.pem");
+        fs::write(&key, "junk").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        load_or_generate(tmp.path()).unwrap();
+        assert_eq!(fs::metadata(&key).unwrap().permissions().mode() & 0o777, 0o600);
     }
 }

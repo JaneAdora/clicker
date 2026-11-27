@@ -1,4 +1,3 @@
-// /home/jane/projects/clicker/src/framing.rs
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Append `n` as a base-128 LEB128 varint (protobuf wire varint) to `buf`.

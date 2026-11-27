@@ -46,6 +46,13 @@ pub struct DeviceEntry {
     pub paired: bool,
     /// Per-device last volume, restored into the UI on connect.
     pub last_volume: Option<u8>,
+    /// mDNS service instance name, when the TV was found by discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+    /// SHA-256 fingerprint (lowercase hex) of the TV's certificate, learned on
+    /// first connect. Identifies the TV across IP changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// Turn a display name into a stable registry id: lowercase, runs of
@@ -120,6 +127,7 @@ impl Config {
             host,
             paired,
             last_volume,
+            ..Default::default()
         });
         cfg.last_device = Some(id);
         cfg
@@ -164,11 +172,12 @@ impl Config {
     }
 
     /// The shortcut for `digit` — the config override, else the built-in default,
-    /// else `None` (an open slot).
+    /// else `None` (an open slot). An override with an empty `target` is a cleared
+    /// slot: it hides the built-in default and yields `None`.
     pub fn shortcut(&self, digit: char) -> Option<Shortcut> {
         let key = digit.to_string();
         if let Some(s) = self.shortcuts.get(&key) {
-            return Some(s.clone());
+            return (!s.target.is_empty()).then(|| s.clone());
         }
         default_shortcuts().get(&key).cloned()
     }
@@ -205,8 +214,11 @@ struct V1Flat {
 /// a top-level `host` key (so a v2 file holding only custom shortcuts is NOT
 /// mistaken for v1), migrates it into a single device, and persists the migrated
 /// form back to disk. Path-parameterized so tests target a unique temp dir.
-fn load_from(dir: &std::path::Path) -> Config {
+pub fn load_from(dir: &std::path::Path) -> Config {
     let path = dir.join("config.toml");
+    // A temporary file left by a write that never finished holds nothing we
+    // want; the real file is still the last complete save.
+    let _ = std::fs::remove_file(dir.join(TMP_NAME));
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Config::default();
     };
@@ -230,11 +242,38 @@ fn load_from(dir: &std::path::Path) -> Config {
     toml::from_str::<Config>(&text).unwrap_or_default()
 }
 
+/// Where a save is written before it replaces `config.toml`.
+const TMP_NAME: &str = "config.toml.tmp";
+
 /// Serialize to TOML and write `dir/config.toml`, creating `dir` if needed.
-fn save_to(dir: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {
+/// The text goes to `config.toml.tmp` first and is then renamed over
+/// `config.toml`, so a write cut short (a crash, a full disk) never leaves a
+/// truncated config, which would load as the default and lose every TV. On
+/// Unix the file is readable by the user only, since it names their TVs.
+pub fn save_to(dir: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {
+    use std::io::Write;
     std::fs::create_dir_all(dir)?;
     let text = toml::to_string_pretty(cfg)?;
-    std::fs::write(dir.join("config.toml"), text)?;
+    let tmp = dir.join(TMP_NAME);
+    // A left-over file would keep its old mode; start from a fresh one.
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = (|| -> std::io::Result<()> {
+        let mut file = options.open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, dir.join("config.toml"))
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
     Ok(())
 }
 
@@ -285,6 +324,7 @@ mod tests {
             host: "192.168.0.42".into(),
             paired: true,
             last_volume: Some(20),
+            ..Default::default()
         });
         save_to(tmp.path(), &cfg).expect("save");
 
@@ -348,5 +388,71 @@ mod tests {
             },
         );
         assert_eq!(cfg.shortcut('1').unwrap().label, "Jellyfin");
+    }
+
+    #[test]
+    fn old_config_without_new_fields_loads() {
+        let cfg: Config = toml::from_str(
+            "last_device = \"tv\"\n[[device]]\nid = \"tv\"\nname = \"TV\"\nhost = \"192.0.2.10\"\npaired = true\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.devices[0].fingerprint, None);
+        assert_eq!(cfg.devices[0].service_name, None);
+    }
+
+    fn one_tv() -> Config {
+        let mut cfg = Config::default();
+        cfg.upsert_device(DeviceEntry {
+            id: "den".into(),
+            name: "Den".into(),
+            host: "192.0.2.10".into(),
+            paired: true,
+            ..Default::default()
+        });
+        cfg
+    }
+
+    #[test]
+    fn interrupted_write_loads_the_previous_good_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        save_to(tmp.path(), &one_tv()).expect("save");
+        // A write that died half way leaves garbage in the temporary file only.
+        let stale = tmp.path().join("config.toml.tmp");
+        std::fs::write(&stale, "last_device = \"den\"\n[[device]]\nid = \"de").unwrap();
+
+        let got = load_from(tmp.path());
+        assert_eq!(got.active_device().map(|d| d.host.as_str()), Some("192.0.2.10"));
+        assert!(got.active_device().unwrap().paired);
+        assert!(!stale.exists(), "a stale temporary file is removed on load");
+    }
+
+    #[test]
+    fn save_replaces_the_file_whole_and_leaves_no_temporary() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        save_to(tmp.path(), &one_tv()).expect("save");
+        save_to(tmp.path(), &Config::default()).expect("save again");
+        assert!(!tmp.path().join("config.toml.tmp").exists());
+        assert!(load_from(tmp.path()).devices.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_config_is_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        save_to(tmp.path(), &one_tv()).expect("save");
+        let mode = std::fs::metadata(tmp.path().join("config.toml")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn empty_target_is_a_cleared_slot() {
+        let mut cfg = Config::default();
+        cfg.shortcuts.insert(
+            "1".into(),
+            Shortcut { label: String::new(), kind: LaunchKind::Url, target: String::new() },
+        );
+        assert!(cfg.shortcut('1').is_none()); // overrides the Netflix default
+        assert!(cfg.shortcut('2').is_some());
     }
 }

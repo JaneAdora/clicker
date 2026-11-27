@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::Sender;
 
-use crate::types::TvEvent;
+use clicker_core::types::TvEvent;
 
 const SERVICE: &str = "_androidtvremote2._tcp.local.";
 /// How long one discovery sweep runs before shutting the daemon down. The picker

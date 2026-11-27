@@ -1,4 +1,4 @@
-// /home/jane/projects/clicker/build.rs
+// crates/clicker-core/build.rs
 fn main() {
     println!("cargo:rerun-if-changed=proto/polo.proto");
     println!("cargo:rerun-if-changed=proto/remotemessage.proto");

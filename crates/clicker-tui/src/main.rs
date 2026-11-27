@@ -1,22 +1,11 @@
-// prost message builders set one field on a defaulted struct; that's the idiomatic
-// shape for these big generated types, so allow clippy's field-reassign lint.
-#![allow(clippy::field_reassign_with_default)]
-
 mod app;
-mod cert;
-mod config;
 mod discovery;
-mod framing;
 mod keymap;
-mod pairing;
-mod proto;
-mod remote;
 mod theme;
-mod tls;
-mod types;
 mod ui;
 
 use anyhow::Result;
+use clicker_core::{cert, config};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

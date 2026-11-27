@@ -1,6 +1,6 @@
 // src/ui/header.rs
 use crate::theme;
-use crate::types::LinkState;
+use clicker_core::types::LinkState;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;

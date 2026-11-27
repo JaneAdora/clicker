@@ -1,4 +1,3 @@
-// /home/jane/projects/clicker/src/proto.rs
 // Generated protobuf types from proto/*.proto, compiled by build.rs (prost).
 // One include! per proto package; the file name prost emits is "<package>.rs".
 // Adjust the string literals below if Step 1's grep showed a different package.

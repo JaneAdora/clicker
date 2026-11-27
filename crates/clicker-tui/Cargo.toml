@@ -1,0 +1,24 @@
+[package]
+name = "clicker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A terminal Android TV / Google TV remote speaking the native Remote protocol v2."
+readme = "../../README.md"
+keywords = ["android-tv", "google-tv", "remote", "tui", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clicker-core = { path = "../clicker-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.29"
+suite-term = { git = "https://github.com/JaneAdora/suite-term", rev = "eec40bcd1516156d5245ef73aeb4a5aef243d497", features = ["clipboard", "panic-hook"] }
+futures = "0.3"
+anyhow = "1"
+# Pure-Rust mDNS (no system deps) for Android TV discovery (_androidtvremote2._tcp).
+mdns-sd = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

@@ -5,7 +5,7 @@ pub mod header;
 pub mod modal;
 
 use crate::app::App;
-use crate::types::InputMode;
+use clicker_core::types::InputMode;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Frame;
 

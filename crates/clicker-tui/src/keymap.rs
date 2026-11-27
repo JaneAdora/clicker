@@ -2,7 +2,7 @@
 // Rules: every binding is a SINGLE unshifted key (so nothing requires Shift), and
 // every key is shown on screen (ui/body.rs), so bindings need only be unique, not
 // memorable.
-use crate::types::{RemoteKey, TvCmd};
+use clicker_core::types::{RemoteKey, TvCmd};
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// What a keypress resolves to.

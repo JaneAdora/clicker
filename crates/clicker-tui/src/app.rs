@@ -1,6 +1,6 @@
 // src/app.rs
-use crate::config::{Config, DeviceEntry};
-use crate::types::{InputMode, LinkState, PickerRow, RemoteKey, TvCmd, TvEvent};
+use clicker_core::config::{Config, DeviceEntry};
+use clicker_core::types::{InputMode, LinkState, PickerRow, RemoteKey, TvCmd, TvEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 
@@ -144,7 +144,8 @@ impl App {
                 self.mode = InputMode::Normal;
                 self.toast("paired");
             }
-            TvEvent::PairingFailed(msg) => {
+            // The TUI shows both the same way: the message inside the PIN modal.
+            TvEvent::PairingFailed(msg) | TvEvent::PairingUnreachable(msg) => {
                 // Stay in PinEntry, clear the buffer, surface the error.
                 self.mode = InputMode::PinEntry {
                     entered: String::new(),
@@ -180,6 +181,8 @@ impl App {
                 self.link = LinkState::Down;
                 self.toast(msg);
             }
+            // Persisted by `run`; nothing to show.
+            TvEvent::ServerIdentity { .. } => {}
         }
     }
 
@@ -218,10 +221,10 @@ impl App {
 // `handle_pin_key`). tokio lives entirely inside `run`; `main()` stays sync.
 // ===========================================================================
 
-use crate::cert::ClientIdentity;
-use crate::config;
+use clicker_core::cert::ClientIdentity;
+use clicker_core::config;
 use crate::keymap::{self, Action};
-use crate::remote;
+use clicker_core::remote;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use ratatui::backend::Backend;
@@ -293,6 +296,7 @@ pub async fn run<B: Backend>(
                                     host: host.clone(),
                                     paired: false,
                                     last_volume: None,
+                                    ..Default::default()
                                 });
                                 app.tv_name = host;
                                 save_or_toast(&mut app);
@@ -373,6 +377,18 @@ pub async fn run<B: Backend>(
                             save_or_toast(&mut app);
                         }
                     }
+                    TvEvent::ServerIdentity { host, fingerprint } => {
+                        // Record the TV's identity once, and only on the device
+                        // this connection was actually to.
+                        let changed = app
+                            .config
+                            .active_device_mut()
+                            .map(|d| record_fingerprint(d, host, fingerprint))
+                            .unwrap_or(false);
+                        if changed {
+                            save_or_toast(&mut app);
+                        }
+                    }
                     TvEvent::VolumeChanged { level, .. } => {
                         let changed = app
                             .config
@@ -415,7 +431,7 @@ pub async fn run<B: Backend>(
 /// an owned copy. Re-load from disk (cheap, one-time) rather than deriving Clone
 /// on the DER types. Always succeeds here because cert/key were just written.
 fn id_clone(_id: &ClientIdentity) -> anyhow::Result<ClientIdentity> {
-    crate::cert::load_or_generate(&config::dir())
+    clicker_core::cert::load_or_generate(&config::dir())
 }
 
 /// Mint a FRESH command channel, repoint `app.cmd_tx` at it, and spawn the
@@ -713,6 +729,7 @@ fn handle_picker_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                         host: row.host.clone(),
                         paired: false,
                         last_volume: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -772,10 +789,22 @@ fn handle_probe_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
 }
 
+/// Store `fingerprint` on `d` if the event came from a connection to `d`'s host
+/// and `d` has no fingerprint yet. A late event from a TV the user has since
+/// switched away from must not stamp the new device. Returns whether it changed.
+fn record_fingerprint(d: &mut DeviceEntry, host: &str, fingerprint: &str) -> bool {
+    if d.host == host && d.fingerprint.is_none() {
+        d.fingerprint = Some(fingerprint.to_string());
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use clicker_core::config::Config;
 
     fn test_app() -> App {
         let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -822,6 +851,19 @@ mod tests {
         app.apply_tv_event(TvEvent::PairingFailed("bad pin".into()));
         match &app.mode {
             InputMode::PinEntry { error: Some(e), .. } => assert_eq!(e, "bad pin"),
+            _ => panic!("expected PinEntry with error"),
+        }
+    }
+
+    #[test]
+    fn pairing_unreachable_reads_like_pairing_failed() {
+        let mut app = test_app();
+        app.apply_tv_event(TvEvent::PairingUnreachable("pairing connect failed: TV not reachable".into()));
+        match &app.mode {
+            InputMode::PinEntry { entered, error: Some(e) } => {
+                assert!(entered.is_empty());
+                assert_eq!(e, "pairing connect failed: TV not reachable");
+            }
             _ => panic!("expected PinEntry with error"),
         }
     }
@@ -1009,5 +1051,25 @@ mod tests {
             }
             _ => panic!("not in picker"),
         }
+    }
+
+    #[test]
+    fn fingerprint_recorded_only_for_matching_host() {
+        let mut d = DeviceEntry { host: "10.0.0.5".into(), ..Default::default() };
+        assert!(!record_fingerprint(&mut d, "10.0.0.9", "aa"));
+        assert_eq!(d.fingerprint, None);
+        assert!(record_fingerprint(&mut d, "10.0.0.5", "bb"));
+        assert_eq!(d.fingerprint.as_deref(), Some("bb"));
+    }
+
+    #[test]
+    fn existing_fingerprint_is_not_overwritten() {
+        let mut d = DeviceEntry {
+            host: "10.0.0.5".into(),
+            fingerprint: Some("old".into()),
+            ..Default::default()
+        };
+        assert!(!record_fingerprint(&mut d, "10.0.0.5", "new"));
+        assert_eq!(d.fingerprint.as_deref(), Some("old"));
     }
 }

@@ -139,7 +139,12 @@ pub fn render_text_input(f: &mut Frame, area: Rect, buffer: &str, field_active: 
 
 /// Device picker: saved TVs (●), discovered TVs (○), and a manual-entry row.
 /// The selected row is highlighted with a `›` caret.
-pub fn render_picker(f: &mut Frame, area: Rect, rows: &[crate::types::PickerRow], selected: usize) {
+pub fn render_picker(
+    f: &mut Frame,
+    area: Rect,
+    rows: &[clicker_core::types::PickerRow],
+    selected: usize,
+) {
     let block = Block::default()
         .title(Line::from(Span::styled(
             " devices ",

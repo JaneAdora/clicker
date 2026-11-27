@@ -247,7 +247,7 @@ fn volume_line(app: &App) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use clicker_core::config::Config;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -256,7 +256,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let mut app = App::new(Config::default(), tx);
         app.tv_name = "Living Room".into();
-        app.link = crate::types::LinkState::Connected;
+        app.link = clicker_core::types::LinkState::Connected;
         app.volume = 32;
         app.volume_max = 100;
 
@@ -271,8 +271,8 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let mut app = App::new(Config::default(), tx);
         app.tv_name = "Living Room".into();
-        app.link = crate::types::LinkState::Connected;
-        app.mode = crate::types::InputMode::KeyProbe {
+        app.link = clicker_core::types::LinkState::Connected;
+        app.mode = clicker_core::types::InputMode::KeyProbe {
             entered: "243".into(),
             last: Some("sent keycode 178".into()),
         };
