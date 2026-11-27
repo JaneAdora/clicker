@@ -26,7 +26,8 @@ read these variables at all.
 
 ## Where the keystore lives
 
-Keep the keystore outside the repo, for example `~/.android-keys/clicker-release.jks`.
+Keep the keystore outside the repo, in a private directory of your own. The
+examples here call it `/path/to/keys/release.jks`; use your own path and file name.
 The repo ignores `*.jks` and `*.keystore` as a backstop, but the file should never
 be inside the working tree in the first place. Keep the password in 1Password, not
 in a file next to the keystore.
@@ -35,8 +36,8 @@ To create the keystore once (keytool prompts for the password, so it never lands
 your shell history):
 
 ```sh
-mkdir -p ~/.android-keys && chmod 700 ~/.android-keys
-keytool -genkeypair -keystore ~/.android-keys/clicker-release.jks \
+mkdir -p /path/to/keys && chmod 700 /path/to/keys
+keytool -genkeypair -keystore /path/to/keys/release.jks \
   -storetype PKCS12 -alias clicker -keyalg RSA -keysize 4096 -validity 10000 \
   -dname "CN=Clicker"
 ```
@@ -47,11 +48,11 @@ Back up the keystore file somewhere safe as well (see "If the keystore is lost")
 
 Put the variables in an env file of `op://` references. It holds no secrets, only
 pointers, but keep it outside the repo anyway, for example
-`~/.android-keys/clicker-release.env`. Replace `<vault>` and `<item>` with your own
+`/path/to/keys/release.env`. Replace `<vault>` and `<item>` with your own
 vault and item names; the field names must match the fields on the item.
 
 ```sh
-CLICKER_KEYSTORE=/home/<you>/.android-keys/clicker-release.jks
+CLICKER_KEYSTORE=/path/to/keys/release.jks
 CLICKER_KEYSTORE_PASSWORD=op://<vault>/<item>/password
 CLICKER_KEY_ALIAS=op://<vault>/<item>/alias
 ```
@@ -59,7 +60,7 @@ CLICKER_KEY_ALIAS=op://<vault>/<item>/alias
 Then build:
 
 ```sh
-op run --env-file="$HOME/.android-keys/clicker-release.env" -- ./gradlew assembleRelease
+op run --env-file=/path/to/keys/release.env -- ./gradlew assembleRelease
 ```
 
 The signed APK is `android/app/build/outputs/apk/release/app-release.apk`.
