@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Window theme: the brand ground from the first frame, so a cold start
+         never flashes white. Compose draws everything after that. -->
+    <style name="Theme.Clicker" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:statusBarColor">@color/ground</item>
+        <item name="android:navigationBarColor">@color/ground</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+        <!-- Android 12 and later: the system splash is the same ground with the
+             remote mark, so the splash and the first frame are one surface. -->
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ground</item>
+        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@drawable/splash_mark</item>
+    </style>
+</resources>

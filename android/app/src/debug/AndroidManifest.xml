@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the theme gallery and the remote screen with sample
+     states, started with
+     adb shell am start -n com.janeadora.clicker/.debug.ThemeGalleryActivity
+     adb shell am start -n com.janeadora.clicker/.debug.RemotePreviewActivity
+     adb shell am start -n com.janeadora.clicker/.debug.DevicesPreviewActivity
+     plus a receiver that saves a test TV (see AddDeviceReceiver). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".debug.ThemeGalleryActivity"
+            android:exported="true" />
+        <activity
+            android:name=".debug.RemotePreviewActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".debug.DevicesPreviewActivity"
+            android:exported="true" />
+        <receiver
+            android:name=".debug.AddDeviceReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

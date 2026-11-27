@@ -9,7 +9,7 @@ then drive everything from a terminal.
 As far as I can tell this is the first from-scratch Rust implementation of the v2
 pairing + command protocol (TLS client cert, protobuf messages, the SHA-256
 pairing-secret handshake, mDNS discovery, and live IME text entry). If you've been
-trying to talk to an Android TV from Rust, the protocol code in [`src/`](src/) is
+trying to talk to an Android TV from Rust, the protocol code in [`crates/clicker-core/src/`](crates/clicker-core/src/) is
 the interesting part.
 
 ```
@@ -86,7 +86,7 @@ cp target/release/clicker ~/.local/bin/      # or anywhere on PATH
 Or install straight from the checkout:
 
 ```sh
-cargo install --path .
+cargo install --path crates/clicker-tui
 ```
 
 It also builds cleanly on Android under [Termux](https://termux.dev/) — install
@@ -124,7 +124,7 @@ Every binding is a single un-shifted key.
 | `PgUp` / `PgDn` | Channel up / down | | | |
 
 `q` and `Ctrl-C` quit from every mode (in typing mode, only `Ctrl-C`, so a literal
-`q` is typed). [`src/keymap.rs`](src/keymap.rs) is the source of truth.
+`q` is typed). [`crates/clicker-tui/src/keymap.rs`](crates/clicker-tui/src/keymap.rs) is the source of truth.
 
 ## Multiple TVs & discovery
 
@@ -211,6 +211,34 @@ they're best confirmed on your own setup.
 
 clicker started life as a member of a personal Rust TUI suite, so it borrows that
 suite's ratatui styling, but it's self-contained and builds and runs on its own.
+
+## Android app
+
+`android/` holds Clicker for Android: a phone remote for the same TVs, written in
+Kotlin with Jetpack Compose. It shares the Rust core with the terminal app.
+`crates/clicker-core` does the pairing, the TLS session and the remote protocol for
+both, and `crates/clicker-ffi` exposes it to Kotlin through UniFFI. The phone app
+adds what a phone does better: discovery through Android's own service discovery,
+haptics, the phone's volume keys, the system keyboard for typing, and shortcut
+tiles with your own pictures.
+
+To build a debug APK and install it on a running emulator or a plugged-in phone,
+set up the toolchain once as described in [docs/android/SETUP.md](docs/android/SETUP.md)
+(Android SDK and NDK, `cargo-ndk`, the Android Rust targets), then:
+
+```sh
+source android/env.sh
+cd android
+./gradlew installDebug        # or assembleDebug for the APK alone
+./gradlew testDebugUnitTest   # host unit tests
+```
+
+Gradle builds the Rust library and generates the Kotlin bindings itself. To build a
+signed release APK for your own phone, see [docs/android/RELEASE.md](docs/android/RELEASE.md).
+
+How Clicker trusts a TV (pairing, plus remembering each TV's certificate after the
+first connection) is described in [SECURITY.md](SECURITY.md). Fonts and libraries
+the app bundles are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## License
 

@@ -1,0 +1,29 @@
+[package]
+name = "clicker-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UniFFI facade over clicker-core for the Clicker Android app."
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "clicker_ffi"
+
+[features]
+# Builds the `uniffi-bindgen` binary. Off by default so the Android library
+# does not carry the bindgen code.
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+clicker-core = { path = "../clicker-core" }
+uniffi = "=0.32.2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
