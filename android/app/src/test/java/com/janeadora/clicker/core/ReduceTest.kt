@@ -64,6 +64,27 @@ class ReduceTest {
         assertEquals("disk full", events.fold(start, ::reduce).startupError)
     }
 
+    @Test fun only_an_accepted_code_counts_as_a_pairing() {
+        val sent = RemoteUiState(link = Link.Pairing, activeId = "den", pairingSubmitted = true)
+        assertEquals(1, reduce(sent, RemoteEvent.PairingOk).pairingsAccepted)
+        assertEquals(2, reduce(reduce(sent, RemoteEvent.PairingOk), RemoteEvent.PairingOk).pairingsAccepted)
+        // Picking another TV while a code is out moves the link the same way, and is not a pairing.
+        val others = listOf(
+            RemoteEvent.Connecting("attic"),
+            RemoteEvent.Connected("attic", "Attic"),
+            RemoteEvent.Disconnected(null),
+            RemoteEvent.Disconnected("TV not reachable"),
+            RemoteEvent.PairingRequired,
+            RemoteEvent.PairingFailed("bad pin", true),
+            RemoteEvent.Volume(1u, 10u, false),
+            RemoteEvent.TextFieldActive(true),
+            RemoteEvent.DevicesChanged,
+            RemoteEvent.DifferentTv("192.0.2.10"),
+        )
+        for (e in others) assertEquals("after $e", 0, reduce(sent, e).pairingsAccepted)
+        assertEquals(0, others.fold(sent, ::reduce).pairingsAccepted)
+    }
+
     @Test fun pairing_ok_clears_error() {
         val s = reduce(RemoteUiState(link = Link.Pairing, pairingError = "bad pin"), RemoteEvent.PairingOk)
         assertNull(s.pairingError)

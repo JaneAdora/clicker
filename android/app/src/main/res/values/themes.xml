@@ -12,9 +12,5 @@
              remote mark, so the splash and the first frame are one surface. -->
         <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ground</item>
         <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@drawable/splash_mark</item>
-        <!-- Android 12 and later: the system splash is the same ground with the
-             remote mark, so the splash and the first frame are one surface. -->
-        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ground</item>
-        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@drawable/splash_mark</item>
     </style>
 </resources>

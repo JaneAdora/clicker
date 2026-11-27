@@ -61,7 +61,7 @@ fun Modifier.remoteKey(
     return this
         .pointerInput(presser, repeat, feel) {
             detectKeyPresses(interaction) {
-                KeyHold(repeat, { presser.press(feel, send) }, { presser.tick(send) }, presser::release)
+                KeyHold(repeat, { presser.press(feel, send) }, { presser.tick(send) }) { held, repeated -> presser.release(feel, held, repeated) }
             }
         }
         // TalkBack sends exactly one key, never a repeat.

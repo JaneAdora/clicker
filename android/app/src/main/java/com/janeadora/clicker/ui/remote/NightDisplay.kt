@@ -196,13 +196,24 @@ internal fun NightDisplay(
         }
         if (r.figure.isNotEmpty()) {
             Spacer(Modifier.weight(1f))
-            // Only this text recomposes while the figure counts up.
-            val coming = powerOn()
-            val level = r.figure.toIntOrNull()
-            val figure = if (coming < 1f && level != null) sweepCount(level, coming).toString() else r.figure
-            Text(figure, style = ClickerType.readout, color = c.nightAccent, maxLines = 1)
+            Figure(r.figure, c.nightAccent, powerOn)
         }
     }
+}
+
+// The display's figure. During the power-on it counts up with the meter.
+// [powerOn] is read here and nowhere else in the display's composition, so
+// only this text recomposes while it counts.
+@Composable
+private fun Figure(figure: String, ink: Color, powerOn: () -> Float) {
+    val coming = powerOn()
+    val level = figure.toIntOrNull()
+    Text(
+        if (coming < 1f && level != null) sweepCount(level, coming).toString() else figure,
+        style = ClickerType.readout,
+        color = ink,
+        maxLines = 1,
+    )
 }
 
 // The display's words. After a press that found no TV they also light in

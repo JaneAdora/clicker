@@ -65,28 +65,42 @@ class HapticsTest {
         assertEquals(KeyFeel.entries.size, KeyFeel.entries.map(::pressHaptic).toSet().size)
     }
 
-    @Test fun a_quick_tap_has_no_release_haptic() {
-        assertFalse(releaseHapticDue(0, repeated = false))
-        assertFalse(releaseHapticDue(RELEASE_HAPTIC_AFTER_MS - 1, repeated = false))
+    // feel, how long it was held, whether it repeated, then whether letting go is felt.
+    private val releases = listOf(
+        Release(KeyFeel.Nav, 0, repeated = false, felt = false),
+        Release(KeyFeel.Nav, RELEASE_HAPTIC_AFTER_MS - 1, repeated = false, felt = false),
+        Release(KeyFeel.Nav, RELEASE_HAPTIC_AFTER_MS, repeated = false, felt = true),
+        Release(KeyFeel.Nav, 2_000, repeated = false, felt = true),
+        Release(KeyFeel.Nav, REPEAT_DELAY_MS + 1, repeated = true, felt = false),
+        Release(KeyFeel.Nav, 5_000, repeated = true, felt = false),
+        Release(KeyFeel.Confirm, RELEASE_HAPTIC_AFTER_MS - 1, repeated = false, felt = false),
+        Release(KeyFeel.Confirm, RELEASE_HAPTIC_AFTER_MS, repeated = false, felt = true),
+        Release(KeyFeel.Step, RELEASE_HAPTIC_AFTER_MS, repeated = false, felt = true),
+        Release(KeyFeel.Step, 5_000, repeated = true, felt = false),
+        Release(KeyFeel.Power, 0, repeated = false, felt = false),
+        Release(KeyFeel.Power, RELEASE_HAPTIC_AFTER_MS, repeated = false, felt = false),
+        Release(KeyFeel.Power, 2_000, repeated = false, felt = false),
+        Release(KeyFeel.Power, 5_000, repeated = true, felt = false),
+    )
+
+    private data class Release(val feel: KeyFeel, val heldMs: Long, val repeated: Boolean, val felt: Boolean)
+
+    @Test fun letting_go_is_felt_only_after_a_deliberate_hold_that_did_not_repeat() {
+        for (r in releases) assertEquals("$r", r.felt, releaseHapticDue(r.feel, r.heldMs, r.repeated))
     }
 
-    @Test fun a_deliberate_hold_is_felt_on_release() {
-        assertTrue(releaseHapticDue(RELEASE_HAPTIC_AFTER_MS, repeated = false))
-        assertTrue(releaseHapticDue(2_000, repeated = false))
+    @Test fun letting_go_of_power_is_never_felt() {
+        for (held in listOf(0L, RELEASE_HAPTIC_AFTER_MS, 60_000L)) for (repeated in listOf(false, true)) {
+            assertFalse(releaseHapticDue(KeyFeel.Power, held, repeated))
+        }
+        for (feel in KeyFeel.entries - KeyFeel.Power) assertTrue("$feel", releaseHapticDue(feel, RELEASE_HAPTIC_AFTER_MS, repeated = false))
     }
 
-    @Test fun a_key_that_repeated_is_never_felt_on_release() {
-        assertFalse(releaseHapticDue(REPEAT_DELAY_MS + 1, repeated = true))
-        assertFalse(releaseHapticDue(5_000, repeated = true))
-    }
-
-    @Test fun pairing_is_confirmed_only_when_a_sent_code_is_accepted() {
-        assertTrue(pairingSucceeded(wasPairing = true, codeSent = true, nowLinking = true))
-        // Cancelled, or the link dropped: not a success.
-        assertFalse(pairingSucceeded(wasPairing = true, codeSent = true, nowLinking = false))
-        // No code was sent, so the user did not cause this.
-        assertFalse(pairingSucceeded(wasPairing = true, codeSent = false, nowLinking = true))
-        // An ordinary connect or reconnect is silent.
-        assertFalse(pairingSucceeded(wasPairing = false, codeSent = false, nowLinking = true))
+    @Test fun pairing_is_confirmed_only_when_the_accepted_count_rises() {
+        assertTrue(pairingAccepted(seen = 0, accepted = 1))
+        assertTrue(pairingAccepted(seen = 3, accepted = 4))
+        // Nothing accepted since the last look: a connect, a reconnect, another TV picked.
+        assertFalse(pairingAccepted(seen = 0, accepted = 0))
+        assertFalse(pairingAccepted(seen = 2, accepted = 2))
     }
 }

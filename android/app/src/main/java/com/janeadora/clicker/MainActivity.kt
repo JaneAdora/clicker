@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.lifecycle.Lifecycle
@@ -50,7 +51,6 @@ import com.janeadora.clicker.ui.remote.RemoteScreen
 import com.janeadora.clicker.ui.shortcuts.ShortcutsHost
 import com.janeadora.clicker.ui.theme.ClickerTheme
 import com.janeadora.clicker.ui.theme.DarkColors
-import com.janeadora.clicker.ui.theme.ENTRANCE_MS
 import com.janeadora.clicker.ui.theme.EntranceGate
 import com.janeadora.clicker.ui.theme.LocalClickerColors
 import com.janeadora.clicker.ui.theme.handOverFromSplash
@@ -214,8 +214,8 @@ class MainActivity : ComponentActivity() {
             open = showDevices,
             onOpenChange = { showDevices = it },
             haptics = settings.haptics,
-            // On a first run the switcher opens by itself; it waits for the entrance to land.
-            openDelayMs = if (entrance.running) ENTRANCE_MS else 0L,
+            // On a first run the switcher opens by itself, once the entrance has landed.
+            beforeOpen = { snapshotFlow { entrance.running }.first { !it } },
             canDiscover = access.granted,
             notice = LOCAL_NETWORK_NOTICE,
             allowLabel = if (access.action == LocalNetworkAction.OpenSettings) "Open settings" else "Allow access",

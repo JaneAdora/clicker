@@ -30,6 +30,11 @@ data class RemoteUiState(
     val pairingWrongCode: Boolean = false,
     /** A code was sent and the TV has not answered yet. */
     val pairingSubmitted: Boolean = false,
+    /**
+     * How many pairing codes the TV has accepted this run. Only the TV
+     * accepting a code moves it, so a rise is a pairing that just succeeded.
+     */
+    val pairingsAccepted: Int = 0,
     val differentTvHost: String? = null,
     val shortcuts: List<ShortcutSlot> = emptyList(),
     /** Set when the Rust Remote could not be created; the app cannot work. */
@@ -69,7 +74,12 @@ fun reduce(state: RemoteUiState, event: RemoteEvent): RemoteUiState = when (even
         pairingWrongCode = event.wrongCode,
         pairingSubmitted = false,
     )
-    RemoteEvent.PairingOk -> state.copy(link = Link.Connecting, pairingError = null, pairingSubmitted = false)
+    RemoteEvent.PairingOk -> state.copy(
+        link = Link.Connecting,
+        pairingError = null,
+        pairingSubmitted = false,
+        pairingsAccepted = state.pairingsAccepted + 1,
+    )
     is RemoteEvent.Volume -> state.copy(
         volume = Volume(event.level.toInt(), event.max.toInt(), event.muted),
     )

@@ -199,7 +199,7 @@ fun DPad(
                             repeat = key != Key.SELECT,
                             press = { presser.press(feelFor(key), send).also { sent -> if (sent) feel.pressed(key) } },
                             tick = { presser.tick(send).also { sent -> if (sent) feel.ticked(key) } },
-                            release = presser::release,
+                            release = { held, repeated -> presser.release(feelFor(key), held, repeated) },
                         )
                     }
                 }
@@ -251,6 +251,7 @@ private fun BoxScope.Arrow(
             .keyNode(label, enabled) { onPress(key) },
         contentAlignment = Alignment.Center,
     ) {
-        DottedChevron(direction, c.accent, Modifier.size(34.dp), swellColor = c.dotMark[2]) { lit.value }
+        // Lit, the arrow runs hot: toward the heading ink, the strongest against the ring in either mode.
+        DottedChevron(direction, c.accent, Modifier.size(34.dp), swellColor = c.heading) { lit.value }
     }
 }

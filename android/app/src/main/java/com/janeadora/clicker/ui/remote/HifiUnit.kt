@@ -32,14 +32,19 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.toSize
 import com.janeadora.clicker.ui.theme.ENTRANCE_BAND
-import kotlin.math.floor
+import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -58,8 +63,6 @@ import com.janeadora.clicker.ui.theme.LocalClickerColors
 import com.janeadora.clicker.ui.theme.LocalEntrance
 import com.janeadora.clicker.ui.theme.Settle
 import com.janeadora.clicker.ui.theme.DOT_PITCH_DP
-import com.janeadora.clicker.ui.theme.arrived
-import com.janeadora.clicker.ui.theme.seedDistance
 import com.janeadora.clicker.ui.theme.reduceMotion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -134,18 +137,22 @@ internal fun Shell(modifier: Modifier = Modifier, fill: Boolean = false, content
 
 /**
  * The body's share of the launch entrance: it prints in through a screen of
- * dots on the dot ground's own grid, each dot growing as the entrance's
- * front passes it until the dots close up and the body is whole. Only the
+ * dots on the dot ground's grid, each dot growing as the entrance's front
+ * passes it until the dots close up and the body is whole. Only the
  * drawing is clipped, to those dots, on the screen's own canvas. Layout and
  * touch are final from the first frame, so a key pressed while it prints is
  * sent like any other. When the entrance is over (or there is none) this
  * adds nothing at all: the body is drawn as it always was.
+ *
+ * Each frame the clip is one disc for everything the front has passed plus
+ * the dots still growing in the band behind the front (see [printDots]),
+ * put into one path that is kept and rewound, so a frame allocates nothing.
  */
 @Composable
 private fun Modifier.printsIn(entrance: Entrance?): Modifier {
     if (entrance == null || !entrance.running) return this
     val at = remember { mutableStateOf(Rect.Zero) }
-    val dots = remember { Path() }
+    val clip = remember { Path() }
     return this
         // Where the body sits in the window, and how big the window is, for the shared grid and seed.
         .onGloballyPositioned { at.value = Rect(it.positionInRoot(), it.findRootCoordinates().size.toSize()) }
@@ -155,36 +162,86 @@ private fun Modifier.printsIn(entrance: Entrance?): Modifier {
                 drawContent()
                 return@drawWithContent
             }
-            val origin = at.value.topLeft
-            val w = at.value.width
-            val h = at.value.height
-            val pitch = DOT_PITCH_DP.dp.toPx()
+            val place = at.value
+            val dots = clip.asAndroidPath()
             dots.rewind()
-            if (w > 0f && h > 0f) {
+            if (place.width > 0f && place.height > 0f) {
+                val grown = printedRadius(front, place.width, place.height)
                 // Everything the front has fully passed: one disc around the seed corner.
-                val whole = (front * (1f + ENTRANCE_BAND) - ENTRANCE_BAND) * hypot(w, h)
-                if (whole > 0f) dots.addOval(Rect(Offset(w - origin.x, -origin.y), whole))
-                // Then the dots still growing behind the front. Full grown they overlap, leaving no gaps.
-                val full = pitch * PRINT_DOT
-                var y = pitch / 2f + floor(origin.y / pitch) * pitch - origin.y
-                while (y < size.height + pitch) {
-                    var x = pitch / 2f + floor(origin.x / pitch) * pitch - origin.x
-                    while (x < size.width + pitch) {
-                        val grown = arrived(front, seedDistance(x + origin.x, y + origin.y, w, h))
-                        if (grown > 0f && grown < 1f) dots.addOval(Rect(Offset(x, y), full * grown))
-                        x += pitch
-                    }
-                    y += pitch
+                if (grown > 0f) dots.addCircle(place.width - place.left, -place.top, grown, android.graphics.Path.Direction.CW)
+                printDots(front, place.left, place.top, size.width, size.height, place.width, place.height, DOT_PITCH_DP.dp.toPx()) { x, y, r ->
+                    dots.addCircle(x, y, r, android.graphics.Path.Direction.CW)
                 }
             }
-            clipPath(dots) { this@drawWithContent.drawContent() }
+            clipPath(clip) { this@drawWithContent.drawContent() }
         }
         // The body keeps its recorded drawing while it prints, so each frame only moves the clip.
         .graphicsLayer()
 }
 
-// A print dot at full size, as a share of the grid pitch: past 0.71 neighbours overlap and the print is solid.
-private const val PRINT_DOT = 0.76f
+// A print dot at full size, as a share of the print pitch: past 0.71 neighbours overlap and the print is solid.
+internal const val PRINT_DOT = 0.76f
+
+// The print's pitch in steps of the dot ground's: every other ground dot, so the clip has a quarter of the dots.
+internal const val PRINT_STEP = 2
+
+/**
+ * How far from the seed corner the body is whole when the front is at
+ * [front], in a [w] by [h] window: everything nearer has arrived. Negative
+ * while nothing has.
+ */
+internal fun printedRadius(front: Float, w: Float, h: Float): Float = (front * (1f + ENTRANCE_BAND) - ENTRANCE_BAND) * hypot(w, h)
+
+/**
+ * The print dots still growing when the entrance's front is at [front],
+ * for a body [width] by [height] whose top left is at ([left], [top]) in a
+ * [w] by [h] window. They sit on every [PRINT_STEP]th point of the dot
+ * ground's grid ([pitch] apart, from the window's corner) in the ring
+ * between [printedRadius] and the front, and nowhere else: each row is
+ * walked only between the two columns where that ring crosses it, so the
+ * cost follows the ring, not the body. [dot] gets each one's centre, in the
+ * body's own coordinates, and its radius.
+ */
+internal inline fun printDots(
+    front: Float,
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+    w: Float,
+    h: Float,
+    pitch: Float,
+    dot: (x: Float, y: Float, radius: Float) -> Unit,
+) {
+    val diagonal = hypot(w, h)
+    val band = ENTRANCE_BAND * diagonal
+    val outer = front * (1f + ENTRANCE_BAND) * diagonal
+    if (front >= 1f || band <= 0f || outer <= 0f || pitch <= 0f) return
+    val inner = outer - band
+    val step = pitch * PRINT_STEP
+    val full = step * PRINT_DOT
+    // Rows run down from the seed's side, so the first one past the front ends the walk.
+    var row = ceil((top - full - pitch / 2f) / step).toInt()
+    while (true) {
+        val y = pitch / 2f + row * step
+        if (y - top > height + full || y >= outer) break
+        row++
+        if (y <= -outer) continue
+        // The ring crosses this row between these distances left of the seed.
+        val far = sqrt(outer * outer - y * y)
+        val near = if (inner > abs(y)) sqrt(inner * inner - y * y) else 0f
+        val from = max(w - far, left - full)
+        val to = min(w - near, left + width + full)
+        var column = ceil((from - pitch / 2f) / step).toInt()
+        while (true) {
+            val x = pitch / 2f + column * step
+            if (x > to) break
+            column++
+            val grown = (outer - hypot(w - x, y)) / band
+            if (grown > 0f && grown < 1f) dot(x - left, y - top, full * grown)
+        }
+    }
+}
 
 /** A recessed compartment in the shell: the ground tone inside a hairline. */
 @Composable

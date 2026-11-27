@@ -3,6 +3,7 @@ package com.janeadora.clicker.ui.devices
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -17,7 +18,7 @@ import com.janeadora.clicker.core.Link
 import com.janeadora.clicker.core.RemoteRepository
 import com.janeadora.clicker.core.RemoteUiState
 import com.janeadora.clicker.ui.remote.Haptic
-import com.janeadora.clicker.ui.remote.pairingSucceeded
+import com.janeadora.clicker.ui.remote.pairingAccepted
 import com.janeadora.clicker.ui.remote.playHaptic
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
@@ -33,9 +34,9 @@ private const val LOOK_MS = 8_000L
  * screen's state (link already adjusted for Wi-Fi). [onConnect] connects
  * to a saved TV by id, asking for local network access first if needed.
  * With no saved TV the sheet opens by itself once per launch, after
- * [openDelayMs] (the launch entrance, when one is playing). When the TV
- * accepts a pairing code there is one quiet haptic, if [haptics] is on;
- * connections the user did not just make are silent.
+ * [beforeOpen] returns (it waits out the launch entrance, when one is
+ * playing). When the TV accepts a pairing code there is one quiet haptic,
+ * if [haptics] is on; connecting, reconnecting and switching TVs are silent.
  */
 @Composable
 fun DevicesHost(
@@ -50,24 +51,23 @@ fun DevicesHost(
     onAllowLocalNetwork: () -> Unit,
     onConnect: (String) -> Unit,
     haptics: Boolean = false,
-    openDelayMs: Long = 0L,
+    beforeOpen: suspend () -> Unit = {},
 ) {
     var decided by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (openOnStart(decided, state.devices.isNotEmpty(), state.startupError != null)) {
-            delay(openDelayMs)
+            beforeOpen()
             onOpenChange(true)
         }
         decided = true
     }
     val view = LocalView.current
-    // The link and whether a code was out, as last seen; never the code.
-    var before by remember { mutableStateOf(state.link to state.pairingSubmitted) }
-    LaunchedEffect(state.link, state.pairingSubmitted) {
-        val (link, codeSent) = before
-        val linking = state.link == Link.Connecting || state.link == Link.Connected
-        if (pairingSucceeded(link == Link.Pairing, codeSent, linking)) playHaptic(view, Haptic.Paired, haptics)
-        before = state.link to state.pairingSubmitted
+    // The count of accepted codes as last seen, starting from now: a screen
+    // rebuilt after a pairing does not confirm it again.
+    var seen by remember { mutableIntStateOf(state.pairingsAccepted) }
+    LaunchedEffect(state.pairingsAccepted) {
+        if (pairingAccepted(seen, state.pairingsAccepted)) playHaptic(view, Haptic.Paired, haptics)
+        seen = state.pairingsAccepted
     }
     var enterIp by rememberSaveable { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf<String?>(null) }

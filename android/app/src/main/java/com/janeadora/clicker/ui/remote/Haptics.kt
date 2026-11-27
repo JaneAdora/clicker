@@ -83,15 +83,19 @@ fun hapticConstant(haptic: Haptic, sdk: Int = Build.VERSION.SDK_INT): Int? = whe
 const val RELEASE_HAPTIC_AFTER_MS = 180L
 
 /**
- * Whether letting go of a key is felt. Only after a deliberate hold of
- * [RELEASE_HAPTIC_AFTER_MS]: on a quick tap the release would run into the
- * press. Never after a key [repeated], where one more tick would feel like
- * one more step that was not sent.
+ * Whether letting go of a key with [feel] is felt. Only after a deliberate
+ * hold of [RELEASE_HAPTIC_AFTER_MS]: on a quick tap the release would run
+ * into the press. Never after a key [repeated], where one more tick would
+ * feel like one more step that was not sent. Never for Power: its press is
+ * the heaviest click there is, and a tick right behind it would blur it.
  */
-fun releaseHapticDue(heldMs: Long, repeated: Boolean): Boolean = !repeated && heldMs >= RELEASE_HAPTIC_AFTER_MS
+fun releaseHapticDue(feel: KeyFeel, heldMs: Long, repeated: Boolean): Boolean =
+    feel != KeyFeel.Power && !repeated && heldMs >= RELEASE_HAPTIC_AFTER_MS
 
 /**
- * True when the link went from pairing, with a code sent, to being on its
- * way or up: the TV accepted the code the user typed.
+ * True when the TV has accepted a pairing code since this screen last
+ * looked: [accepted] is the running count of codes accepted (see
+ * RemoteUiState.pairingsAccepted) and [seen] the count last looked at. A
+ * connect, a reconnect or a switch to another TV never moves the count.
  */
-fun pairingSucceeded(wasPairing: Boolean, codeSent: Boolean, nowLinking: Boolean): Boolean = wasPairing && codeSent && nowLinking
+fun pairingAccepted(seen: Int, accepted: Int): Boolean = accepted > seen

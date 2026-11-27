@@ -135,9 +135,9 @@ class KeyPresser internal constructor(
         return result.accepted
     }
 
-    /** A key that was sent is let go after [heldMs]; felt only after a deliberate hold (see [releaseHapticDue]). */
-    fun release(heldMs: Long, repeated: Boolean) {
-        if (releaseHapticDue(heldMs, repeated)) haptic(Haptic.Release)
+    /** A key with [feel] that was sent is let go after [heldMs]; felt only after a deliberate hold (see [releaseHapticDue]). */
+    fun release(feel: KeyFeel, heldMs: Long, repeated: Boolean) {
+        if (releaseHapticDue(feel, heldMs, repeated)) haptic(Haptic.Release)
     }
 
     /**

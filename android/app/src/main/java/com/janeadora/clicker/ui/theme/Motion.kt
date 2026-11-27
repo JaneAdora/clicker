@@ -50,7 +50,7 @@ const val ENTRANCE_MS = 520L
  * screen. This is the share of the screen's diagonal behind the front in
  * which things are still growing; further back they have arrived.
  */
-const val ENTRANCE_BAND = 0.24f
+const val ENTRANCE_BAND = 0.12f
 
 /**
  * Where the entrance's front is [elapsedMs] after it started: 0 at the seed
@@ -143,8 +143,12 @@ fun rememberEntrance(play: Boolean, splashGone: suspend () -> Unit = {}, onPhase
     return entrance
 }
 
-/** The longest the entrance waits for the system splash to hand over before it starts anyway. */
-const val SPLASH_WAIT_MS = 300L
+/**
+ * The longest the entrance waits for the system splash to hand over before
+ * it starts anyway. Some launches show no splash and so never hand over;
+ * the body is not drawn while this runs, so it is kept short.
+ */
+const val SPLASH_WAIT_MS = 150L
 
 /** How long the splash's mark takes to draw back into a dot. Short, so it is gone before the body prints over its place. */
 const val SPLASH_OUT_MS = 100L
