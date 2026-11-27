@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher foreground: a remote. One solid body, 24 by 50dp with 10dp
+     corners, with a ring near the top (the D-pad) and two dots under it
+     (keys) cut out of it. All ink is at most 25.2dp from the centre of the
+     108dp adaptive canvas (the safe zone is 33dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/launcher_glyph"
+        android:fillType="evenOdd"
+        android:pathData="M52,29h4a10,10 0 0 1 10,10v30a10,10 0 0 1 -10,10h-4a10,10 0 0 1 -10,-10v-30a10,10 0 0 1 10,-10ZM46.6,42.5a7.4,7.4 0 1 0 14.8,0a7.4,7.4 0 1 0 -14.8,0ZM49.7,42.5a4.3,4.3 0 1 0 8.6,0a4.3,4.3 0 1 0 -8.6,0ZM46.2,59.5a2.4,2.4 0 1 0 4.8,0a2.4,2.4 0 1 0 -4.8,0ZM57,59.5a2.4,2.4 0 1 0 4.8,0a2.4,2.4 0 1 0 -4.8,0Z" />
+</vector>

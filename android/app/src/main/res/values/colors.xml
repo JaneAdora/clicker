@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The brand ground (lavender-page), shown before Compose draws. -->
+    <color name="ground">#F3EEF9</color>
+    <!-- Launcher icon only. This purple is not in the app palette; it is
+         used for the unthemed icon background and nowhere else. -->
+    <color name="launcher_background">#9262C8</color>
+    <color name="launcher_glyph">#151020</color>
+</resources>
