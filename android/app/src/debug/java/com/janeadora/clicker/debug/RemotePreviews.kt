@@ -11,6 +11,7 @@ import com.janeadora.clicker.ui.remote.ProvideKeyFeedback
 import com.janeadora.clicker.ui.remote.RemoteScreen
 import com.janeadora.clicker.ui.theme.ClickerTheme
 import uniffi.clicker_ffi.Device
+import uniffi.clicker_ffi.Key
 import uniffi.clicker_ffi.ShortcutSlot
 
 /** Sample remote states for previews and the debug preview activity. */
@@ -31,6 +32,17 @@ object RemoteSamples {
         volume = Volume(level = 12, max = 100, muted = false),
         shortcuts = shortcuts,
     )
+
+    /** [state] after the sample TV has taken [key]: the volume keys step its volume and Mute flips it. */
+    fun afterKey(state: RemoteUiState, key: Key): RemoteUiState {
+        val v = state.volume ?: return state
+        return when (key) {
+            Key.VOL_UP -> state.copy(volume = v.copy(level = (v.level + 1).coerceAtMost(v.max), muted = false))
+            Key.VOL_DOWN -> state.copy(volume = v.copy(level = (v.level - 1).coerceAtLeast(0), muted = false))
+            Key.MUTE -> state.copy(volume = v.copy(muted = !v.muted))
+            else -> state
+        }
+    }
 
     /** By name, for the debug activity's `state` extra. */
     val byName: Map<String, RemoteUiState> = mapOf(

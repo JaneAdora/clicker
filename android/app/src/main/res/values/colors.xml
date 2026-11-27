@@ -2,6 +2,8 @@
 <resources>
     <!-- The brand ground (lavender-page), shown before Compose draws. -->
     <color name="ground">#F3EEF9</color>
+    <!-- The remote mark on the system splash: the accent on the ground. -->
+    <color name="splash_mark">#6F3A9A</color>
     <!-- Launcher icon only. This purple is not in the app palette; it is
          used for the unthemed icon background and nowhere else. -->
     <color name="launcher_background">#9262C8</color>

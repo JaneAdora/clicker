@@ -40,6 +40,8 @@ import com.janeadora.clicker.core.Settings
 import com.janeadora.clicker.ui.shortcuts.TilePicture
 import com.janeadora.clicker.ui.theme.ClickerType
 import com.janeadora.clicker.ui.theme.DotGround
+import com.janeadora.clicker.ui.theme.Entrance
+import com.janeadora.clicker.ui.theme.LocalEntrance
 import com.janeadora.clicker.ui.theme.LocalClickerColors
 import uniffi.clicker_ffi.Key
 
@@ -79,6 +81,9 @@ internal val SIDE = SHELL_SIDE.dp
  * above the keyboard; the body then holds only the status row, Back, Home
  * and Menu and the D-pad in the space left (see [TypingRemote]).
  * [pictures] gives each shortcut tile's picture by slot.
+ * [entrance] is the launch entrance, when this start plays one: the dot
+ * ground grows in and the body prints in behind one front from the top
+ * right corner. Nothing is laid out or hit differently while it runs.
  */
 @Composable
 fun RemoteScreen(
@@ -89,6 +94,7 @@ fun RemoteScreen(
     pulse: Int = 0,
     typingBar: Dp? = null,
     pictures: (String) -> TilePicture = { TilePicture.None },
+    entrance: Entrance? = null,
     onAction: (RemoteAction) -> Boolean,
 ) {
     val c = LocalClickerColors.current
@@ -104,6 +110,26 @@ fun RemoteScreen(
         return
     }
     KeepScreenOn(settings.keepScreenOn)
+    val powerOn = rememberPowerOn(live = state.link == Link.Connected && state.volume != null && notice == null)
+    // The dot ground and the body both follow the entrance, from their draw phases.
+    CompositionLocalProvider(LocalEntrance provides entrance) {
+        RemoteLayout(state, settings, notice, noticeOpensSettings, pulse, typingBar, pictures, powerOn, onAction)
+    }
+}
+
+@Composable
+private fun RemoteLayout(
+    state: RemoteUiState,
+    settings: Settings,
+    notice: String?,
+    noticeOpensSettings: Boolean,
+    pulse: Int,
+    typingBar: Dp?,
+    pictures: (String) -> TilePicture,
+    powerOn: () -> Float,
+    onAction: (RemoteAction) -> Boolean,
+) {
+    val c = LocalClickerColors.current
     BoxWithConstraints(Modifier.fillMaxSize().background(c.surface)) {
         val landscape = maxWidth > maxHeight
         val screenHeight = maxHeight
@@ -115,7 +141,7 @@ fun RemoteScreen(
         val bottomInset = with(density) { bars.getBottom(this).toDp() }
         // Sizes depend on the screen alone, never on the link, so nothing moves when the TV drops or comes back.
         val metrics = remoteMetrics(screenHeight.value, density.fontScale, bottomInset.value, topInset.value, maxWidth.value)
-        val parts = RemoteParts(state, onAction, notice, noticeOpensSettings, metrics, settings.dpad, pulse, pictures)
+        val parts = RemoteParts(state, onAction, notice, noticeOpensSettings, metrics, settings.dpad, pulse, pictures, powerOn)
         // The body keeps clear of the bars and stands SIDE in from the screen's edges.
         val body = Modifier.safeDrawingPadding().padding(start = SIDE, end = SIDE, top = SHELL_TOP.dp)
         if (typingBar != null) {
@@ -163,12 +189,13 @@ internal class RemoteParts(
     val dpad: DpadStyle,
     val pulse: Int,
     val pictures: (String) -> TilePicture = { TilePicture.None },
+    powerOn: () -> Float = { 1f },
 ) {
     val connected = state.link == Link.Connected
     val press: (Key) -> Boolean = { onAction(RemoteAction.Press(it)) }
 
     val tvName: String = tvNameFor(state)
-    val plate = PlateState(state.link, tvName, state.volume, state.devices.isNotEmpty(), notice, noticeOpensSettings, onAction)
+    val plate = PlateState(state.link, tvName, state.volume, state.devices.isNotEmpty(), notice, noticeOpensSettings, onAction, powerOn)
 }
 
 /**

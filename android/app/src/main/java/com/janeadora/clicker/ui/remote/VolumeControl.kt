@@ -29,13 +29,13 @@ import uniffi.clicker_ffi.Key
 fun VolumeControl(volume: Volume?, enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val k = Modifier.weight(1f).fillMaxHeight()
-        RemoteButton("Volume down", { onPress(Key.VOL_DOWN) }, k, enabled, repeat = true) {
+        RemoteButton("Volume down", { onPress(Key.VOL_DOWN) }, k, enabled, repeat = true, feel = KeyFeel.Step) {
             Glyph { color -> sign(color, plus = false) }
         }
         RemoteButton("Mute", { onPress(Key.MUTE) }, k, enabled) {
             Glyph { color -> speaker(color, muted = volume?.muted == true) }
         }
-        RemoteButton("Volume up", { onPress(Key.VOL_UP) }, k, enabled, repeat = true) {
+        RemoteButton("Volume up", { onPress(Key.VOL_UP) }, k, enabled, repeat = true, feel = KeyFeel.Step) {
             Glyph { color -> sign(color, plus = true) }
         }
     }

@@ -2,9 +2,7 @@ package com.janeadora.clicker.ui.remote
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
-import android.os.Build
 import android.os.SystemClock
-import android.view.HapticFeedbackConstants
 import android.util.Log
 import android.view.View
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -80,15 +78,14 @@ fun ProvideKeyFeedback(haptics: Boolean, onNotConnected: () -> Unit, content: @C
     CompositionLocalProvider(LocalKeyFeedback provides feedback, content = content)
 }
 
-/** The reject haptic: REJECT where the phone has it (API 30), LONG_PRESS before. */
-val REJECT_HAPTIC = if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS
-
 /**
- * Plays haptic [constant] on [view] when [on]. Debug builds log each call
- * (tag Clicker), so the Haptics setting can be checked on an emulator.
+ * Plays [haptic] on [view] when [on] (see [hapticConstant] for what each one
+ * is). Debug builds log each call (tag Clicker), so the Haptics setting and
+ * the choice of haptic can be checked on an emulator.
  */
-fun playHaptic(view: View, constant: Int, on: Boolean) {
-    debugLog(view.context, if (on) "haptic $constant" else "haptic $constant skipped, haptics off")
+fun playHaptic(view: View, haptic: Haptic, on: Boolean) {
+    val constant = hapticConstant(haptic) ?: return
+    debugLog(view.context, if (on) "haptic $haptic $constant" else "haptic $haptic $constant skipped, haptics off")
     if (on) view.performHapticFeedback(constant)
 }
 
@@ -123,18 +120,24 @@ class KeyPresser internal constructor(
 ) {
     /**
      * One press. Connected: [send] runs at once and returns whether the key
-     * went out; then a tap haptic if it did. Not connected, or refused:
-     * a reject haptic plays and the screen says why. Returns true when sent.
+     * went out; then the haptic for its [feel] if it did. Not connected, or
+     * refused: a reject haptic plays and the screen says why. Returns true
+     * when sent.
      */
-    fun press(send: () -> Boolean): Boolean {
+    fun press(feel: KeyFeel = KeyFeel.Nav, send: () -> Boolean): Boolean {
         val result = pressResult(enabled.value, send)
         if (result.accepted) {
-            haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+            haptic(pressHaptic(feel))
         } else {
-            haptic(REJECT_HAPTIC)
+            haptic(Haptic.Reject)
             feedback.value.onNotConnected()
         }
         return result.accepted
+    }
+
+    /** A key that was sent is let go after [heldMs]; felt only after a deliberate hold (see [releaseHapticDue]). */
+    fun release(heldMs: Long, repeated: Boolean) {
+        if (releaseHapticDue(heldMs, repeated)) haptic(Haptic.Release)
     }
 
     /**
@@ -144,11 +147,11 @@ class KeyPresser internal constructor(
     fun tick(send: () -> Boolean): Boolean {
         if (!enabled.value || !live()) return false
         if (!send()) return false
-        haptic(HapticFeedbackConstants.CLOCK_TICK)
+        haptic(Haptic.RepeatTick)
         return true
     }
 
-    private fun haptic(constant: Int) = playHaptic(view, constant, feedback.value.haptics)
+    private fun haptic(haptic: Haptic) = playHaptic(view, haptic, feedback.value.haptics)
 }
 
 /** A [KeyPresser] for keys that work while [enabled] (a TV is connected). */
@@ -169,9 +172,16 @@ fun rememberKeyPresser(enabled: Boolean): KeyPresser {
 /**
  * What a press does, decided where the finger lands. [press] runs on the
  * down and returns true when it sent; [tick] runs for each repeat when
- * [repeat] is set and returns false to stop.
+ * [repeat] is set and returns false to stop. [release] runs when the finger
+ * lifts from a key that was sent, with how long it was held and whether it
+ * repeated; it is feedback only.
  */
-class KeyHold(val repeat: Boolean, val press: () -> Boolean, val tick: () -> Boolean)
+class KeyHold(
+    val repeat: Boolean,
+    val press: () -> Boolean,
+    val tick: () -> Boolean,
+    val release: (heldMs: Long, repeated: Boolean) -> Unit = { _, _ -> },
+)
 
 /**
  * The one gesture for every remote key. The press fires on the down, in the
@@ -194,12 +204,14 @@ suspend fun PointerInputScope.detectKeyPresses(
         val sent = hold.press()
         val press = PressInteraction.Press(down.position)
         interaction.tryEmit(press)
+        var repeated = false
         val repeater = if (sent && hold.repeat) {
             launch {
                 var due = nextTick(0)
                 while (true) {
                     delay((start + due - SystemClock.uptimeMillis()).coerceAtLeast(0L))
                     if (!hold.tick()) break
+                    repeated = true
                     due = nextTick(SystemClock.uptimeMillis() - start)
                 }
             }
@@ -211,6 +223,7 @@ suspend fun PointerInputScope.detectKeyPresses(
         } finally {
             repeater?.cancel()
         }
+        if (released && sent) hold.release(SystemClock.uptimeMillis() - start, repeated)
         interaction.tryEmit(if (released) PressInteraction.Release(press) else PressInteraction.Cancel(press))
     }
 }

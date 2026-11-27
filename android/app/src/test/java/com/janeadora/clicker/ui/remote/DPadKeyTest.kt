@@ -2,6 +2,7 @@ package com.janeadora.clicker.ui.remote
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.clicker_ffi.Key
 
@@ -33,4 +34,14 @@ class DPadKeyTest {
         assertNull(at(5f, 5f))
         assertNull(at(240f, 240f))
     }
+
+    @Test fun the_ring_of_dots_around_ok_starts_and_ends_as_nothing() {
+        assertEquals(0f, confirmDot(0f), 0f)
+        assertEquals(0f, confirmDot(1f), 0f)
+        assertEquals(0f, confirmDot(1.5f), 0f)
+        assertEquals(1f, confirmDot(0.25f), 0.0001f)
+        for (step in 0..100) assertTrue(confirmDot(step / 100f) in 0f..1f)
+    }
+
+    @Test fun a_repeat_lights_the_arrow_less_than_the_press() = assertTrue(TICK_SWELL > 0f && TICK_SWELL < 1f)
 }

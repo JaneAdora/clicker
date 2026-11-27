@@ -96,4 +96,36 @@ class NightDisplayTest {
         assertEquals("Choose a TV", plateName("", anySaved = true))
         assertEquals("Add a TV", plateName(""))
     }
+
+    @Test fun the_readout_powers_on_only_when_it_goes_live_on_a_screen_that_was_up() {
+        assertTrue(powerOnPlays(wasLive = false, live = true))
+        // A screen that opens already connected (a rotation, a return to the app) shows the reading at once.
+        assertFalse(powerOnPlays(wasLive = null, live = true))
+        // Still live, or going dark: nothing plays.
+        assertFalse(powerOnPlays(wasLive = true, live = true))
+        assertFalse(powerOnPlays(wasLive = true, live = false))
+        assertFalse(powerOnPlays(wasLive = false, live = false))
+    }
+
+    @Test fun the_power_on_sweep_starts_empty_and_ends_on_the_reading() {
+        assertEquals(0, sweepCount(7, 0f))
+        assertEquals(7, sweepCount(7, 1f))
+        assertEquals(58, sweepCount(58, 1f))
+        assertEquals(29, sweepCount(58, 0.5f))
+        // Out of range progress never shows less than nothing or more than the reading.
+        assertEquals(0, sweepCount(7, -0.3f))
+        assertEquals(7, sweepCount(7, 1.4f))
+    }
+
+    @Test fun the_sweep_never_runs_backwards() {
+        var last = 0
+        for (step in 0..100) {
+            val now = sweepCount(18, step / 100f)
+            assertTrue(now >= last)
+            last = now
+        }
+        assertEquals(18, last)
+    }
+
+    @Test fun the_power_on_is_short() = assertTrue(POWER_ON_MS <= 400)
 }

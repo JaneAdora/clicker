@@ -24,10 +24,10 @@ class PaletteTest {
             assertTrue(contrast(c.heading, c.shell) >= 4.5)
             assertTrue(contrast(c.muted, c.shell) >= 4.5)
             assertTrue(contrast(c.muted, c.bay) >= 4.5)
-            // The key's hairline and bottom edge: 3:1 against the shell, and in a
-            // compartment against the key's own face or the compartment around it.
+            // The key's hairline and bottom edge: 3:1 against what it stands on,
+            // the shell on the face and the compartment for a key seated in one.
             assertTrue(contrast(c.outlineStrong, c.shell) >= 3.0)
-            assertTrue(maxOf(contrast(c.outlineStrong, c.key), contrast(c.outlineStrong, c.bay)) >= 3.0)
+            assertTrue(contrast(c.bayKeyLine, c.bay) >= 3.0)
             // The arrows and the OK disc on the D-pad ring.
             assertTrue(contrast(c.accent, c.key) >= 4.5)
         }

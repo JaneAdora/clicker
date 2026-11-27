@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -37,23 +38,26 @@ const val PRESS_GROW_MS = 120
  * [PRESS_GROW_MS], then holds still until release, when it goes at once.
  * With reduce motion on it appears at full size with no tween. It only
  * draws; the key has already been sent when it starts. Presses that land
- * within [centre] of the middle use [centreColor] (the D-pad's OK disc).
+ * within [centre] of the middle draw nothing (the D-pad's OK disc answers
+ * for itself). With [live] false (no TV) there are no dots at all: a
+ * refused press must not look like an accepted one.
  */
 @Composable
 fun rememberPressDots(
     color: Color = LocalClickerColors.current.accent,
-    centreColor: Color = color,
     centre: Dp = 0.dp,
+    live: Boolean = true,
 ): IndicationNodeFactory {
     val context = LocalContext.current
+    val liveNow = rememberUpdatedState(live)
     // Read at each press, so a change to the phone's setting takes effect at once.
-    return remember(color, centreColor, centre, context) { PressDots(color, centreColor, centre) { reduceMotion(context) } }
+    return remember(color, centre, context) { PressDots(color, centre, { liveNow.value }) { reduceMotion(context) } }
 }
 
 private class PressDots(
     val color: Color,
-    val centreColor: Color,
     val centre: Dp,
+    val live: () -> Boolean,
     val instant: () -> Boolean,
 ) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode = PressDotsNode(interactionSource, this)
@@ -74,7 +78,10 @@ private class PressDotsNode(
                 when (i) {
                     is PressInteraction.Press -> {
                         at = i.pressPosition
-                        if (style.instant()) {
+                        if (!style.live()) {
+                            grow.snapTo(0f)
+                            invalidateDraw()
+                        } else if (style.instant()) {
                             grow.snapTo(1f)
                             invalidateDraw()
                         } else {
@@ -97,8 +104,8 @@ private class PressDotsNode(
         val g = grow.value
         if (g > 0f) {
             val p = if (at.isSpecified()) at else center
-            val inCentre = (p - center).getDistance() <= style.centre.toPx()
-            val color = if (inCentre) style.centreColor else style.color
+            if (style.centre > 0.dp && (p - center).getDistance() <= style.centre.toPx()) return
+            val color = style.color
             val ring = min(size.minDimension * 0.32f, 26.dp.toPx()) * g
             val dot = 2.2.dp.toPx() * (0.4f + 0.6f * g)
             for (k in 0 until DOTS) {

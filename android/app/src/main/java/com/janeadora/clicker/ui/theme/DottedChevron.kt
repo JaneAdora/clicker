@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
 
 enum class Direction { Up, Down, Left, Right }
@@ -33,12 +34,25 @@ private val SINGLE = run {
 }
 private const val SINGLE_DOT_RADIUS = 0.07f
 
+/** How much bigger a chevron's dots are at full [DottedChevron] swell. */
+const val CHEVRON_SWELL = 0.3f
+
 /**
  * The brand's dotted chevron: a single chevron by default, or the double
  * chevron with [double]. Decorative: the button around it carries the label.
+ * [swell] (0 at rest, up to 1) is read while drawing: it grows the single
+ * chevron's dots by up to [CHEVRON_SWELL] and turns them toward
+ * [swellColor], for the moment a press lights the arrow.
  */
 @Composable
-fun DottedChevron(direction: Direction, color: Color, modifier: Modifier = Modifier, double: Boolean = false) {
+fun DottedChevron(
+    direction: Direction,
+    color: Color,
+    modifier: Modifier = Modifier,
+    double: Boolean = false,
+    swellColor: Color = color,
+    swell: () -> Float = { 0f },
+) {
     val degrees = when (direction) {
         Direction.Right -> 0f
         Direction.Down -> 90f
@@ -57,7 +71,10 @@ fun DottedChevron(direction: Direction, color: Color, modifier: Modifier = Modif
                     }
                 }
             } else {
-                for (p in SINGLE) drawCircle(color, SINGLE_DOT_RADIUS * s, Offset(left + p.x * s, top + p.y * s))
+                val lit = swell().coerceIn(0f, 1f)
+                val ink = if (lit > 0f) lerp(color, swellColor, lit) else color
+                val r = SINGLE_DOT_RADIUS * s * (1f + CHEVRON_SWELL * lit)
+                for (p in SINGLE) drawCircle(ink, r, Offset(left + p.x * s, top + p.y * s))
             }
         }
     }

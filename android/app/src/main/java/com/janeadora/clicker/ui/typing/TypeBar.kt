@@ -71,6 +71,8 @@ import com.janeadora.clicker.ui.remote.capLift
 import com.janeadora.clicker.ui.theme.ClickerShapes
 import com.janeadora.clicker.ui.theme.ClickerType
 import com.janeadora.clicker.ui.theme.LocalClickerColors
+import com.janeadora.clicker.ui.theme.PANEL_IN_MS
+import com.janeadora.clicker.ui.theme.Settle
 import com.janeadora.clicker.ui.theme.reduceMotion
 import kotlinx.coroutines.delay
 
@@ -120,8 +122,8 @@ class TypeDraft : ViewModel() {
  * keyboard's Search key, or Enter on a physical keyboard, calls [onSubmit]
  * and then [onClose]. [onClose] also runs for the close button, for Back
  * and when the keyboard is put away. Once hidden the field is emptied;
- * nothing is sent for that. With reduce motion on it appears without a
- * slide. The keyboard is asked not to learn what is typed, since it may be
+ * nothing is sent for that. It slides up from the bottom edge and settles;
+ * with reduce motion on it appears without a slide. The keyboard is asked not to learn what is typed, since it may be
  * a password.
  */
 @Composable
@@ -138,13 +140,14 @@ fun TypeBar(
     LaunchedEffect(connected) { if (!connected) draft.reset() }
     BackHandler(enabled = visible, onBack = onClose)
     val context = LocalContext.current
-    val enter = if (reduceMotion(context)) EnterTransition.None else slideInVertically(tween(160)) { it }
+    val enter = if (reduceMotion(context)) EnterTransition.None else slideInVertically(tween(PANEL_IN_MS, easing = Settle)) { it }
     AnimatedVisibility(
         visible = visible,
         modifier = Modifier
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .then(modifier),
         enter = enter,
+        // It goes at once: a bar sliding out would sit over Type and More, which are live again.
         exit = ExitTransition.None,
     ) {
         Bar(draft, connected, onText, onSubmit, onClose)

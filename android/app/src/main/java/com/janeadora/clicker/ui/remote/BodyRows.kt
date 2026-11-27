@@ -45,7 +45,7 @@ internal fun PadBay(p: RemoteParts, modifier: Modifier, dpad: Dp, ok: Dp, padTop
     Layout(
         content = {
             Bay {}
-            if (swipe) SwipePad(p.connected, p.press, shape = UnitShapes.bayKey) else DPad(p.connected, p.press, Modifier, dpad, ok)
+            if (swipe) SwipePad(p.connected, p.press, shape = UnitShapes.bayKey, inBay = true) else DPad(p.connected, p.press, Modifier, dpad, ok, inBay = true)
             TransportKey(forward = false, p.connected, p.press)
             TransportKey(forward = true, p.connected, p.press)
         },

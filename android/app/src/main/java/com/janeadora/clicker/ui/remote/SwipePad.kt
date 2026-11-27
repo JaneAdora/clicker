@@ -1,25 +1,33 @@
 package com.janeadora.clicker.ui.remote
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -39,6 +47,14 @@ import com.janeadora.clicker.ui.theme.ClickerType
 import com.janeadora.clicker.ui.theme.Direction
 import com.janeadora.clicker.ui.theme.DottedChevron
 import com.janeadora.clicker.ui.theme.LocalClickerColors
+import com.janeadora.clicker.ui.theme.Settle
+import com.janeadora.clicker.ui.theme.reduceMotion
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.sin
 import uniffi.clicker_ffi.Key
 import kotlin.math.abs
 import kotlin.math.sign
@@ -101,27 +117,104 @@ fun tapOutcome(moved: Boolean, upConsumed: Boolean): Key? = if (moved || upConsu
 
 private val SWIPE_ACTIONS = listOf("Up" to Key.UP, "Down" to Key.DOWN, "Left" to Key.LEFT, "Right" to Key.RIGHT, "Select" to Key.SELECT)
 
+/** How small the ring under the finger starts again at each step, as a share of full size. */
+const val STEP_RING = 0.5f
+
+// What the swipe pad shows while it is touched. A ring of dots grows under
+// the finger and goes with it. Each step that is sent starts the ring again
+// from half size and lights the edge arrow for that direction, which
+// settles. A tap that sends OK lets one ring of dots go from where the
+// finger was. With reduce motion the ring shows whole and nothing else moves.
+private class SwipeMarks(private val scope: CoroutineScope, private val instant: () -> Boolean) {
+    var at by mutableStateOf(Offset.Unspecified)
+    val ring = Animatable(0f)
+    val confirm = Animatable(1f)
+    var confirmAt = Offset.Zero
+    val lit = listOf(Key.UP, Key.DOWN, Key.LEFT, Key.RIGHT).associateWith { Animatable(0f) }
+
+    fun down(p: Offset) {
+        at = p
+        scope.launch {
+            if (instant()) {
+                ring.snapTo(1f)
+            } else {
+                ring.snapTo(0f)
+                ring.animateTo(1f, tween(PRESS_GROW_MS, easing = LinearOutSlowInEasing))
+            }
+        }
+    }
+
+    fun stepped(key: Key) {
+        if (instant()) return
+        scope.launch {
+            ring.snapTo(STEP_RING)
+            ring.animateTo(1f, tween(PRESS_GROW_MS, easing = LinearOutSlowInEasing))
+        }
+        val arrow = lit[key] ?: return
+        scope.launch {
+            arrow.snapTo(1f)
+            arrow.animateTo(0f, tween(ARROW_SETTLE_MS, easing = Settle))
+        }
+    }
+
+    fun up(sentOk: Boolean) {
+        val from = at
+        scope.launch {
+            ring.snapTo(0f)
+            if (sentOk && !instant() && from.isSpecified) {
+                confirmAt = from
+                confirm.snapTo(0f)
+                confirm.animateTo(1f, tween(CONFIRM_MS, easing = LinearOutSlowInEasing))
+            }
+        }
+    }
+
+    fun draw(scope: DrawScope, color: Color) = with(scope) {
+        val reach = min(size.minDimension * 0.32f, 26.dp.toPx())
+        val g = ring.value
+        if (g > 0f && at.isSpecified) dots(color, at, reach * g, 2.2.dp.toPx() * (0.4f + 0.6f * g), 10)
+        val p = confirm.value
+        if (p < 1f) dots(color, confirmAt, reach + (6.dp + 10.dp * p).toPx(), 2.4.dp.toPx() * confirmDot(p), 16)
+    }
+
+    private fun DrawScope.dots(color: Color, centre: Offset, radius: Float, dot: Float, count: Int) {
+        for (k in 0 until count) {
+            val a = 2 * PI * k / count
+            drawCircle(color, dot, Offset(centre.x + radius * cos(a).toFloat(), centre.y + radius * sin(a).toFloat()))
+        }
+    }
+}
+
 /**
  * The swipe pad that can stand in for the D-pad: a flat surface in the
  * key tone, in [shape], where a swipe moves and a tap is OK. Its size comes
- * from [modifier]; on the remote body it sits in the D-pad's compartment,
- * above Rewind and Fast forward. Each
- * step is sent as it happens. TalkBack gets Select on double tap and Up,
+ * from [modifier]; on the remote body it sits in the D-pad's compartment
+ * ([inBay]), above Rewind and Fast forward. Each
+ * step is sent as it happens. A ring of dots goes with the finger; each
+ * step sent starts it again and lights the arrow for that direction, and a
+ * tap that sends OK lets one ring of dots go, as OK does on the D-pad. With
+ * no TV nothing lights. TalkBack gets Select on double tap and Up,
  * Down, Left, Right and Select as actions.
  */
 @Composable
-fun SwipePad(enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = Modifier, shape: Shape = UnitShapes.key) {
+fun SwipePad(enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = Modifier, shape: Shape = UnitShapes.key, inBay: Boolean = false) {
     val c = LocalClickerColors.current
     val press by rememberUpdatedState(onPress)
+    val live by rememberUpdatedState(enabled)
     val presser = rememberKeyPresser(enabled)
-    val interaction = remember { MutableInteractionSource() }
-    val select: (Key) -> Unit = { key -> presser.press { press(key) } }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val marks = remember(scope, context) { SwipeMarks(scope) { reduceMotion(context) } }
+    val select: (Key) -> Unit = { key -> presser.press(feelFor(key)) { press(key) } }
     Box(
         modifier
             .clip(shape)
             .background(c.key)
-            .border(ClickerShapes.border, c.outlineStrong, shape)
-            .indication(interaction, rememberPressDots())
+            .border(ClickerShapes.border, if (inBay) c.bayKeyLine else c.outlineStrong, shape)
+            .drawWithContent {
+                drawContent()
+                marks.draw(this, c.accent)
+            }
             .pointerInput(presser) {
                 val recognizer = SwipeRecognizer(SWIPE_STEP.toPx())
                 val slop = viewConfiguration.touchSlop
@@ -129,13 +222,16 @@ fun SwipePad(enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = M
                     val down = awaitFirstDown()
                     down.consume()
                     recognizer.end(moved = true)
-                    val pressed = PressInteraction.Press(down.position)
-                    interaction.tryEmit(pressed)
+                    if (live) marks.down(down.position)
                     var travel = Offset.Zero
                     var refused = false
                     // One buzz per swipe when no TV is connected, not one per step.
-                    fun step(key: Key) {
-                        if (!refused && !presser.press { press(key) }) refused = true
+                    // The marks follow the key: it has gone before anything lights.
+                    fun step(key: Key): Boolean {
+                        if (refused) return false
+                        val sent = presser.press(feelFor(key)) { press(key) }
+                        if (sent) marks.stepped(key) else refused = true
+                        return sent
                     }
                     // Stays true unless a real (unconsumed) up arrives.
                     var cancelled = true
@@ -148,12 +244,13 @@ fun SwipePad(enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = M
                         }
                         val delta = change.positionChange()
                         travel += delta
-                        recognizer.drag(delta.x, delta.y).forEach(::step)
+                        recognizer.drag(delta.x, delta.y).forEach { step(it) }
+                        if (live) marks.at = change.position
                         change.consume()
                     }
                     recognizer.end(moved = true)
-                    tapOutcome(moved = travel.getDistance() > slop, upConsumed = cancelled)?.let(::step)
-                    interaction.tryEmit(if (cancelled) PressInteraction.Cancel(pressed) else PressInteraction.Release(pressed))
+                    val sentOk = tapOutcome(moved = travel.getDistance() > slop, upConsumed = cancelled)?.let { step(it) } == true
+                    marks.up(sentOk)
                 }
             }
             .clearAndSetSemantics {
@@ -164,12 +261,13 @@ fun SwipePad(enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = M
             },
         contentAlignment = Alignment.Center,
     ) {
-        // Four quiet arrows at the edges say which way a swipe goes.
+        // Four quiet arrows at the edges say which way a swipe goes; each lights when its step is sent.
         val hint = Modifier.padding(14.dp).size(22.dp).alpha(if (enabled) 1f else INACTIVE_ALPHA)
-        DottedChevron(Direction.Up, c.outlineStrong, hint.align(Alignment.TopCenter))
-        DottedChevron(Direction.Down, c.outlineStrong, hint.align(Alignment.BottomCenter))
-        DottedChevron(Direction.Left, c.outlineStrong, hint.align(Alignment.CenterStart))
-        DottedChevron(Direction.Right, c.outlineStrong, hint.align(Alignment.CenterEnd))
+        val ink = c.outlineStrong
+        DottedChevron(Direction.Up, ink, hint.align(Alignment.TopCenter), swellColor = c.accent) { marks.lit.getValue(Key.UP).value }
+        DottedChevron(Direction.Down, ink, hint.align(Alignment.BottomCenter), swellColor = c.accent) { marks.lit.getValue(Key.DOWN).value }
+        DottedChevron(Direction.Left, ink, hint.align(Alignment.CenterStart), swellColor = c.accent) { marks.lit.getValue(Key.LEFT).value }
+        DottedChevron(Direction.Right, ink, hint.align(Alignment.CenterEnd), swellColor = c.accent) { marks.lit.getValue(Key.RIGHT).value }
         Text(
             "SWIPE TO MOVE\nTAP FOR OK",
             Modifier.padding(16.dp).alpha(if (enabled) 1f else INACTIVE_ALPHA),

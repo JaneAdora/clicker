@@ -44,7 +44,8 @@ const val NOT_CONNECTED = "Not connected"
  * TV, or when the key was refused, it buzzes and says why instead.
  * Keys with [repeat] repeat while held. Every key on the remote uses it, so
  * press behaviour lives in one place (see [detectKeyPresses]). [interaction]
- * hears each press after the key has gone, for the press visual.
+ * hears each press after the key has gone, for the press visual. [feel]
+ * picks the haptic of an accepted press.
  */
 @Composable
 fun Modifier.remoteKey(
@@ -52,16 +53,19 @@ fun Modifier.remoteKey(
     enabled: Boolean = true,
     repeat: Boolean = false,
     interaction: MutableInteractionSource = remember { MutableInteractionSource() },
+    feel: KeyFeel = KeyFeel.Nav,
     onPress: () -> Boolean,
 ): Modifier {
     val presser = rememberKeyPresser(enabled)
     val send by rememberUpdatedState(onPress)
     return this
-        .pointerInput(presser, repeat) {
-            detectKeyPresses(interaction) { KeyHold(repeat, { presser.press(send) }, { presser.tick(send) }) }
+        .pointerInput(presser, repeat, feel) {
+            detectKeyPresses(interaction) {
+                KeyHold(repeat, { presser.press(feel, send) }, { presser.tick(send) }, presser::release)
+            }
         }
         // TalkBack sends exactly one key, never a repeat.
-        .keyNode(label, enabled) { presser.press(send) }
+        .keyNode(label, enabled) { presser.press(feel, send) }
 }
 
 /**
@@ -83,7 +87,10 @@ fun Modifier.keyNode(label: String, enabled: Boolean, onPress: () -> Unit): Modi
  * bottom edge, which sits down 2dp while pressed (see [raisedKey]); accent
  * filled when [filled]. Size comes from [modifier] and includes the edge.
  * With [enabled] false it shows at 40%, and a press sends nothing but
- * buzzes and says why (see [remoteKey]).
+ * buzzes and says why (see [remoteKey]); the key then only gives a little,
+ * like a key that is locked. [inBay] is for a key seated in a compartment,
+ * whose edge takes the stronger line. [feel] picks the haptic, and Power
+ * also stays down a moment longer.
  */
 @Composable
 fun RemoteButton(
@@ -94,15 +101,26 @@ fun RemoteButton(
     repeat: Boolean = false,
     filled: Boolean = false,
     shape: Shape = UnitShapes.key,
+    inBay: Boolean = false,
+    feel: KeyFeel = KeyFeel.Nav,
     content: @Composable () -> Unit,
 ) {
     val c = LocalClickerColors.current
     val interaction = remember { MutableInteractionSource() }
+    val line = when {
+        filled -> c.accentPressed
+        inBay -> c.bayKeyLine
+        else -> c.outlineStrong
+    }
     Box(
         modifier
             .alpha(if (enabled) 1f else INACTIVE_ALPHA)
-            .remoteKey(label, enabled, repeat, interaction, onPress)
-            .raisedKey(interaction, shape, if (filled) c.accent else c.key, if (filled) c.accentPressed else c.outlineStrong),
+            .remoteKey(label, enabled, repeat, interaction, feel, onPress)
+            .raisedKey(
+                interaction, shape, if (filled) c.accent else c.key, line,
+                minDownMs = if (feel == KeyFeel.Power) POWER_DOWN_MS else KEY_DOWN_MS,
+                live = enabled,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         // The label is the spoken name; remoteKey keeps the content silent.

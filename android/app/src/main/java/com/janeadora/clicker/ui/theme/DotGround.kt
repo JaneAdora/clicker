@@ -131,21 +131,24 @@ fun DotGround(calm: List<Rect>, modifier: Modifier = Modifier) {
 
 /**
  * The dot ground with its [calm] zones read in the draw phase, so a change
- * redraws only this layer, once; nothing runs per frame. Draws nothing
- * while [calm] returns null.
+ * redraws only this layer, once. Draws nothing while [calm] returns null.
+ * At rest nothing runs per frame. While the launch entrance runs (see
+ * [LocalEntrance]) the same cached dots are drawn each frame, each grown by
+ * how far the front has passed it; when it ends the plain draw is back.
  */
 @Composable
 fun DotGround(calm: () -> List<CalmZone>?, modifier: Modifier = Modifier) {
     val inks = LocalClickerColors.current.dotGround
+    val entrance = LocalEntrance.current
     Spacer(
         modifier.drawWithCache {
             val zones = calm() ?: return@drawWithCache onDrawBehind {}
-            dotBuilder(zones, inks).invoke(this)
+            dotBuilder(zones, inks, entrance).invoke(this)
         },
     )
 }
 
-private fun dotBuilder(calm: List<CalmZone>, inks: List<Color>): CacheDrawScope.() -> DrawResult = {
+private fun dotBuilder(calm: List<CalmZone>, inks: List<Color>, entrance: Entrance? = null): CacheDrawScope.() -> DrawResult = {
     val w = size.width
     val h = size.height
     val pitch = DOT_PITCH_DP * density
@@ -166,10 +169,19 @@ private fun dotBuilder(calm: List<CalmZone>, inks: List<Color>): CacheDrawScope.
         y += pitch
     }
     onDrawBehind {
+        // Read here, so the entrance redraws this layer and nothing else.
+        val front = entrance?.front ?: 1f
         for (band in inks.indices) {
             val c = centers[band]
             val rs = radii[band]
-            for (i in c.indices) drawCircle(inks[band], rs[i], c[i])
+            if (front >= 1f) {
+                for (i in c.indices) drawCircle(inks[band], rs[i], c[i])
+            } else {
+                for (i in c.indices) {
+                    val grown = arrived(front, seedDistance(c[i].x, c[i].y, w, h))
+                    if (grown > 0f) drawCircle(inks[band], rs[i] * grown, c[i])
+                }
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,6 +44,7 @@ import com.janeadora.clicker.ui.remote.LocalKeyFeedback
 import com.janeadora.clicker.ui.remote.NOT_CONNECTED
 import com.janeadora.clicker.ui.remote.RemoteAction
 import com.janeadora.clicker.ui.remote.rememberKeyPresser
+import com.janeadora.clicker.ui.remote.tilePress
 import com.janeadora.clicker.ui.theme.ClickerShapes
 import com.janeadora.clicker.ui.theme.ClickerType
 import com.janeadora.clicker.ui.theme.LocalClickerColors
@@ -54,7 +57,7 @@ private const val EDIT_LABEL = "Edit shortcut"
  * corners in slot order, then an Add tile when a slot is free (see
  * [rowTiles]). A tile shows its picture from [pictures] when it has one,
  * an empty tile while a known picture loads, else its label. Tap launches with the keys' feedback; long-press edits, as
- * does Add. Scrolls sideways when the tiles overflow, inside the rack
+ * does Add. A pressed tile sits down like a key (see [tilePress]). Scrolls sideways when the tiles overflow, inside the rack
  * compartment that holds it, with [padding] around the tiles. Must sit
  * inside the remote's key feedback provider.
  */
@@ -90,13 +93,18 @@ private fun ShortcutTile(t: RowTile.Filled, picture: TilePicture, connected: Boo
     val launch = { presser.press { onAction(RemoteAction.Launch(t.slot)) } }
     val edit = { onAction(RemoteAction.EditShortcut(t.slot, tile)) }
     val size = if (picture != TilePicture.None) Modifier.size(tile) else Modifier.sizeIn(minWidth = tile, minHeight = tile)
+    val interaction = remember { MutableInteractionSource() }
     Box(
         size.alpha(if (connected) 1f else INACTIVE_ALPHA)
+            .tilePress(interaction, live = connected)
             .clip(TILE_SHAPE)
             .background(c.key)
             // Drawn over the content, so the hairline also rims a picture.
-            .border(ClickerShapes.border, c.outlineStrong, TILE_SHAPE)
+            .border(ClickerShapes.border, c.bayKeyLine, TILE_SHAPE)
             .combinedClickable(
+                interactionSource = interaction,
+                // The tile's travel is its press; no ripple, as on the keys.
+                indication = null,
                 role = Role.Button,
                 onLongClickLabel = EDIT_LABEL,
                 hapticFeedbackEnabled = haptics,
@@ -126,11 +134,13 @@ private fun ShortcutTile(t: RowTile.Filled, picture: TilePicture, connected: Boo
 @Composable
 private fun AddTile(tile: Dp, onClick: () -> Unit) {
     val c = LocalClickerColors.current
+    val interaction = remember { MutableInteractionSource() }
     Box(
         Modifier.size(tile)
+            .tilePress(interaction)
             .clip(TILE_SHAPE)
-            .border(ClickerShapes.border, c.outlineStrong, TILE_SHAPE)
-            .clickable(role = Role.Button, onClick = onClick)
+            .border(ClickerShapes.border, c.bayKeyLine, TILE_SHAPE)
+            .clickable(interaction, indication = null, role = Role.Button, onClick = onClick)
             .clearAndSetSemantics {
                 contentDescription = "Add shortcut"
                 role = Role.Button

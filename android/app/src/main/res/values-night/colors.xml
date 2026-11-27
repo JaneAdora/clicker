@@ -2,4 +2,5 @@
 <resources>
     <!-- The brand ground (plum-deep), shown before Compose draws. -->
     <color name="ground">#0E0917</color>
+    <color name="splash_mark">#EE9ED9</color>
 </resources>

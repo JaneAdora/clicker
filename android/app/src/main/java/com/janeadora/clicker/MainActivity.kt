@@ -1,12 +1,14 @@
 package com.janeadora.clicker
 
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.ReportDrawn
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
@@ -36,11 +38,11 @@ import com.janeadora.clicker.core.WifiMonitor
 import com.janeadora.clicker.core.linkFor
 import com.janeadora.clicker.core.wantsConnect
 import com.janeadora.clicker.ui.devices.DevicesHost
+import com.janeadora.clicker.ui.remote.Haptic
 import com.janeadora.clicker.ui.remote.HardwareAction
 import com.janeadora.clicker.ui.remote.HardwareKeyRouter
 import com.janeadora.clicker.ui.remote.ProvideKeyFeedback
 import com.janeadora.clicker.ui.remote.debugLog
-import com.janeadora.clicker.ui.remote.REJECT_HAPTIC
 import com.janeadora.clicker.ui.remote.playHaptic
 import com.janeadora.clicker.ui.remote.MoreSheet
 import com.janeadora.clicker.ui.remote.RemoteAction
@@ -48,8 +50,13 @@ import com.janeadora.clicker.ui.remote.RemoteScreen
 import com.janeadora.clicker.ui.shortcuts.ShortcutsHost
 import com.janeadora.clicker.ui.theme.ClickerTheme
 import com.janeadora.clicker.ui.theme.DarkColors
+import com.janeadora.clicker.ui.theme.ENTRANCE_MS
+import com.janeadora.clicker.ui.theme.EntranceGate
 import com.janeadora.clicker.ui.theme.LocalClickerColors
+import com.janeadora.clicker.ui.theme.handOverFromSplash
+import com.janeadora.clicker.ui.theme.rememberEntrance
 import com.janeadora.clicker.ui.typing.TypingHost
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -76,6 +83,12 @@ class MainActivity : ComponentActivity() {
     // The latest stored settings, for the key router and auto-connect.
     private var settings = Settings()
 
+    // Whether this start plays the launch entrance: a cold start only.
+    private var playEntrance = false
+
+    // Done when the system splash has handed over; the entrance starts then.
+    private val splashGone = CompletableDeferred<Unit>()
+
     // True while an on-screen control (Retry, a shortcut tile, the TV
     // switcher) has keyboard focus; remote keys never take focus.
     private var controlFocused = false
@@ -96,6 +109,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        playEntrance = entranceGate.claim(fresh = savedInstanceState == null)
+        handOverFromSplash()
         access.restore(savedInstanceState)
         lifecycle.addObserver(
             LifecycleEventObserver { _, event ->
@@ -149,6 +164,9 @@ class MainActivity : ComponentActivity() {
         val state = core.copy(link = linkFor(wifiUp, core.link))
         var showMore by rememberSaveable { mutableStateOf(false) }
         var showDevices by rememberSaveable { mutableStateOf(false) }
+        val entrance = rememberEntrance(playEntrance, splashGone::await) { debugLog(this, it) }
+        // The screen is complete from this first composition; the entrance is only drawing.
+        ReportDrawn()
         // One provider over the screen and the sheet, so both follow Haptics.
         ProvideKeyFeedback(settings.haptics, onNotConnected = { pulse++ }) {
             ShortcutsHost(state, repository, app.shortcuts) { pictures, editShortcut ->
@@ -162,6 +180,7 @@ class MainActivity : ComponentActivity() {
                             pulse = pulse,
                             typingBar = typingBar,
                             pictures = pictures,
+                            entrance = entrance,
                             onAction = { action ->
                                 when (action) {
                                     is RemoteAction.Press -> repository.key(action.key)
@@ -194,6 +213,9 @@ class MainActivity : ComponentActivity() {
             discovery = discovery,
             open = showDevices,
             onOpenChange = { showDevices = it },
+            haptics = settings.haptics,
+            // On a first run the switcher opens by itself; it waits for the entrance to land.
+            openDelayMs = if (entrance.running) ENTRANCE_MS else 0L,
             canDiscover = access.granted,
             notice = LOCAL_NETWORK_NOTICE,
             allowLabel = if (access.action == LocalNetworkAction.OpenSettings) "Open settings" else "Allow access",
@@ -221,7 +243,7 @@ class MainActivity : ComponentActivity() {
         debugLog(this, "hardware $action first=$first")
         if (repository.state.value.link != Link.Connected) {
             if (first) {
-                playHaptic(window.decorView, REJECT_HAPTIC, settings.haptics)
+                playHaptic(window.decorView, Haptic.Reject, settings.haptics)
                 pulse++
             }
             return
@@ -230,6 +252,12 @@ class MainActivity : ComponentActivity() {
             is HardwareAction.Press -> repository.key(action.key)
             is HardwareAction.Launch -> repository.launch(action.slot)
         }
+    }
+
+    // The system splash is the app's own ground with the remote mark, so
+    // the splash and the first frame are one surface (see handOverFromSplash).
+    private fun handOverFromSplash() {
+        if (Build.VERSION.SDK_INT >= 31) handOverFromSplash(this) { splashGone.complete(Unit) } else splashGone.complete(Unit)
     }
 
     // Status and navigation bar icons follow the app's theme, which can
@@ -276,6 +304,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
+        // One per process: the entrance plays for the first fresh start only.
+        val entranceGate = EntranceGate()
+
         // Set while the activity is being rebuilt for a configuration change.
         // Process-wide, so it is false again after the process is killed.
         var recreating = false

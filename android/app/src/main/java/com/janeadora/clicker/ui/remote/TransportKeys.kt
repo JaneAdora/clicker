@@ -24,7 +24,7 @@ import uniffi.clicker_ffi.Key
 fun TransportKey(forward: Boolean, enabled: Boolean, onPress: (Key) -> Boolean, modifier: Modifier = Modifier) {
     val label = if (forward) "Fast forward" else "Rewind"
     val key = if (forward) Key.FAST_FORWARD else Key.REWIND
-    RemoteButton(label, { onPress(key) }, modifier, enabled, shape = UnitShapes.bayKey) {
+    RemoteButton(label, { onPress(key) }, modifier, enabled, shape = UnitShapes.bayKey, inBay = true) {
         Glyph { c -> twin(c, forward) }
     }
 }

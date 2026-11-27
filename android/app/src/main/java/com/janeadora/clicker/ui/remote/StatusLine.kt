@@ -23,6 +23,8 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +51,8 @@ import com.janeadora.clicker.core.Volume
 import com.janeadora.clicker.ui.theme.ClickerShapes
 import com.janeadora.clicker.ui.theme.ClickerType
 import com.janeadora.clicker.ui.theme.LocalClickerColors
+import com.janeadora.clicker.ui.theme.Settle
+import com.janeadora.clicker.ui.theme.linkPulse
 import com.janeadora.clicker.ui.theme.reduceMotion
 import uniffi.clicker_ffi.Key
 
@@ -111,12 +115,16 @@ fun rememberStatusPulse(pulse: Int): () -> Float {
         if (pulse == 0 || reduceMotion(context)) return@LaunchedEffect
         emphasis.snapTo(0f)
         emphasis.animateTo(1f, tween(PULSE_UP_MS))
-        emphasis.animateTo(0f, tween(PULSE_DOWN_MS))
+        emphasis.animateTo(0f, tween(PULSE_DOWN_MS, easing = Settle))
     }
     return { emphasis.value }
 }
 
-/** What the top of the body needs to know. [notice] is set while local network access is missing. */
+/**
+ * What the top of the body needs to know. [notice] is set while local
+ * network access is missing. [powerOn] is the display's power-on after a
+ * connection (see [rememberPowerOn]).
+ */
 class PlateState(
     val link: Link,
     val tvName: String,
@@ -125,6 +133,7 @@ class PlateState(
     val notice: String?,
     val noticeOpensSettings: Boolean,
     val onAction: (RemoteAction) -> Boolean,
+    val powerOn: () -> Float = { 1f },
 ) {
     val key: PlateKey? get() = plateKey(link, notice != null, noticeOpensSettings)
 }
@@ -190,6 +199,7 @@ fun NameRow(s: PlateState, modifier: Modifier = Modifier, height: Dp = ROW_HEIGH
             modifier = Modifier.size(height),
             enabled = connected,
             shape = UnitShapes.power,
+            feel = KeyFeel.Power,
         ) { PowerGlyph(Modifier.size(20.dp)) }
     }
 }
@@ -203,7 +213,7 @@ fun NameRow(s: PlateState, modifier: Modifier = Modifier, height: Dp = ROW_HEIGH
 @Composable
 fun DisplayRow(s: PlateState, modifier: Modifier = Modifier, emphasis: () -> Float = { 0f }) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        NightDisplay(s.link, s.volume, s.tvName, s.anySaved, Modifier.weight(1f).fillMaxHeight(), s.notice, emphasis)
+        NightDisplay(s.link, s.volume, s.tvName, s.anySaved, Modifier.weight(1f).fillMaxHeight(), s.notice, emphasis, s.powerOn)
         s.key?.let { StatusKey(it, s.onAction, Modifier.fillMaxHeight()) }
     }
 }
@@ -234,17 +244,47 @@ private const val PULSE_UP_MS = 90
 private const val PULSE_DOWN_MS = 160
 internal const val PULSE_SCALE = 0.06f
 
-/** The link light: lit in the accent when connected, lilac while on the way, a hollow ring otherwise. */
+/**
+ * The link light: lit in the accent when connected, lilac while on the way,
+ * a hollow ring otherwise. While on the way it breathes, slowly, and only
+ * then: the moment the link is up or gone the light is lit or hollow and
+ * still. With reduce motion it does not breathe.
+ */
 @Composable
 private fun LinkLight(link: Link) {
     val c = LocalClickerColors.current
     val m = Modifier.size(10.dp).clip(ClickerShapes.control)
     when (link) {
         Link.Connected -> Box(m.background(c.accent))
-        Link.Connecting, Link.Pairing -> Box(m.background(c.accentPressed))
+        Link.Connecting, Link.Pairing -> {
+            val context = LocalContext.current
+            val glow = remember { mutableFloatStateOf(1f) }
+            // Runs only while this branch is on screen, so it stops with the state.
+            LaunchedEffect(Unit) {
+                if (reduceMotion(context)) return@LaunchedEffect
+                val start = withFrameNanos { it }
+                while (true) glow.floatValue = linkPulse((withFrameNanos { it } - start) / 1_000_000)
+            }
+            Box(
+                Modifier.size(10.dp)
+                    .graphicsLayer {
+                        val g = glow.floatValue
+                        alpha = LINK_DIM + (1f - LINK_DIM) * g
+                        val s = LINK_SMALL + (1f - LINK_SMALL) * g
+                        scaleX = s
+                        scaleY = s
+                    }
+                    .clip(ClickerShapes.control)
+                    .background(c.accentPressed),
+            )
+        }
         else -> Box(m.border(1.5.dp, c.outlineStrong, ClickerShapes.control))
     }
 }
+
+// The light at the low point of its breath: how faint, and how small.
+private const val LINK_DIM = 0.35f
+private const val LINK_SMALL = 0.7f
 
 @Composable
 private fun Caret(modifier: Modifier) {

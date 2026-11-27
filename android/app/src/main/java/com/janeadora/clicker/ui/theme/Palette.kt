@@ -16,7 +16,9 @@ import kotlin.math.pow
  * The remote body adds roles built from the same hexes: [shell]
  * is the body's face, [shellBack] the offset shell behind it and
  * [shellBackLine] that shell's hairline, [bay] a
- * recessed compartment, [key] a raised key's face. In both modes the key is
+ * recessed compartment, [key] a raised key's face and [bayKeyLine] the
+ * hairline and edge of a key seated in a compartment, which must hold 3:1
+ * against the compartment. In both modes the key is
  * the lightest of the three and the compartment the darkest. The night
  * display stays dark in both modes: [night] ground, [nightLine] for meter
  * bars that are not lit, [onNight] text, [nightMuted] labels and
@@ -42,6 +44,7 @@ data class ClickerColors(
     val shellBackLine: Color,
     val bay: Color,
     val key: Color,
+    val bayKeyLine: Color,
     val night: Color = Color(0xFF0E0917),
     val nightLine: Color = Color(0xFF3A2E52),
     val onNight: Color = Color(0xFFF0EAF8),
@@ -69,6 +72,7 @@ val DarkColors: ClickerColors = ClickerColors(
     shellBackLine = Color(0xFF3A2E52),
     bay = Color(0xFF0E0917),
     key = Color(0xFF1E1730),
+    bayKeyLine = Color(0xFF6B5C88),
 )
 
 val LightColors: ClickerColors = ClickerColors(
@@ -91,6 +95,7 @@ val LightColors: ClickerColors = ClickerColors(
     shellBackLine = Color(0xFFCFC2E0),
     bay = Color(0xFFDDD2EB),
     key = Color(0xFFF3EEF9),
+    bayKeyLine = Color(0xFF6B5C88),
 )
 
 val LocalClickerColors: ProvidableCompositionLocal<ClickerColors> =
